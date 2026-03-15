@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gleo-node-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "cwd": "gleo-node-api"
+    },
+    {
+      "name": "gleo-wp-plugin (watch)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start"],
+      "port": 0,
+      "cwd": "C:\\Users\\Krish Grover\\Local Sites\\gleo-test\\app\\public\\wp-content\\plugins\\gleo-wp-plugin"
+    }
+  ]
+}

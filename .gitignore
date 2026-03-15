@@ -1,0 +1,26 @@
+# Node
+node_modules/
+npm-debug.log*
+.npm
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build output
+build_output.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Editor
+.vscode/
+.idea/
+
+# Vendor (PHP stubs only — exclude composer auto-generated files if any)
+vendor/
