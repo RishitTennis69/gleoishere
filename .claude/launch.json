@@ -3,10 +3,10 @@
   "configurations": [
     {
       "name": "gleo-node-api",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["index.js"],
       "port": 3000,
-      "cwd": "gleo-node-api"
+      "cwd": "C:\\Users\\Krish Grover\\Desktop\\gleov3\\gleo-node-api"
     },
     {
       "name": "gleo-wp-plugin (watch)",
