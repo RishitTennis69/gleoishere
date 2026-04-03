@@ -826,9 +826,17 @@ const App = () => {
             .catch(err => { setSaveStatus({ type: 'error', message: err.message || 'Error starting scan.' }); setIsScanning(false); });
     };
 
-    const avgScore    = scanResults.length ? Math.round(scanResults.reduce((s, r) => s + (r.result?.geo_score || 0), 0) / scanResults.length) : null;
-    const avgVis      = scanResults.length ? Math.round(scanResults.reduce((s, r) => s + (r.result?.brand_inclusion_rate || 0), 0) / scanResults.length * 10) : null;
-    const totalIssues = scanResults.reduce((s, r) => s + (r.result?.recommendations?.filter(i => i.priority === 'critical' || i.priority === 'high').length || 0), 0);
+    const avgScore      = scanResults.length ? Math.round(scanResults.reduce((s, r) => s + (r.result?.geo_score || 0), 0) / scanResults.length) : null;
+    const totalIssues   = scanResults.reduce((s, r) => s + (r.result?.recommendations?.filter(i => i.priority === 'critical' || i.priority === 'high').length || 0), 0);
+    // Posts scoring 70+ are considered "optimized"
+    const optimizedCount = scanResults.filter(r => (r.result?.geo_score || 0) >= 70).length;
+    // Auto-fixable = recommendations that have a mapped fixType and don't require user input
+    const quickWins     = scanResults.reduce((s, r) => s + (r.result?.recommendations || []).filter(rec => {
+        const ft = AREA_TO_FIX[rec.area];
+        return ft && FIX_CONFIG[ft] && !FIX_CONFIG[ft].needsInput;
+    }).length, 0);
+    // Coverage = % of all published posts that have been scanned
+    const coveragePct   = availablePosts.length > 0 ? Math.round((scanResults.length / availablePosts.length) * 100) : 0;
     const siteHostname = typeof gleoData !== 'undefined' ? (() => { try { return new URL(gleoData.siteUrl).hostname; } catch(e) { return 'your site'; } })() : 'your site';
 
     return (
@@ -887,25 +895,37 @@ const App = () => {
                             <>
                                 <div className="gleo-section-label">Performance</div>
                                 <div className="gleo-kpi-grid">
+                                    {/* 1. Average GEO Score — the single north-star health number */}
                                     <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">GEO Score</div>
-                                        <div className="gleo-kpi-value accent">{avgScore ?? '—'}</div>
-                                        <div className="gleo-kpi-delta up">Avg across {scanResults.length} posts</div>
+                                        <div className="gleo-kpi-label">Avg GEO Score</div>
+                                        <div className="gleo-kpi-value accent">{avgScore !== null ? `${avgScore}/100` : '—'}</div>
+                                        <div className={`gleo-kpi-delta ${avgScore >= 70 ? 'up' : avgScore >= 40 ? 'warn' : 'down'}`}>
+                                            {avgScore >= 70 ? 'Well optimized' : avgScore >= 40 ? 'Room to improve' : 'Needs attention'}
+                                        </div>
                                     </div>
+                                    {/* 2. Posts Optimized — shows progress at a glance */}
                                     <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">AI Visibility</div>
-                                        <div className="gleo-kpi-value">{avgVis !== null ? `${avgVis}%` : '—'}</div>
-                                        <div className="gleo-kpi-delta" style={{ color: 'var(--fg-muted)' }}>Avg brand inclusion rate</div>
+                                        <div className="gleo-kpi-label">Posts Optimized</div>
+                                        <div className="gleo-kpi-value">{optimizedCount}<span style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-muted)' }}>/{scanResults.length}</span></div>
+                                        <div className={`gleo-kpi-delta ${optimizedCount === scanResults.length ? 'up' : 'warn'}`}>
+                                            {optimizedCount === scanResults.length ? 'All scoring 70+' : `${scanResults.length - optimizedCount} below threshold`}
+                                        </div>
                                     </div>
+                                    {/* 3. Quick Wins — immediately actionable, high motivation */}
                                     <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">Posts Scanned</div>
-                                        <div className="gleo-kpi-value">{scanResults.length}</div>
-                                        <div className="gleo-kpi-delta" style={{ color: 'var(--fg-muted)' }}>of {availablePosts.length} total</div>
+                                        <div className="gleo-kpi-label">Quick Wins</div>
+                                        <div className="gleo-kpi-value" style={{ color: quickWins > 0 ? 'var(--blue)' : 'var(--green)' }}>{quickWins}</div>
+                                        <div className={`gleo-kpi-delta ${quickWins > 0 ? 'up' : 'up'}`}>
+                                            {quickWins > 0 ? 'Auto-fixable now' : 'Nothing left to fix'}
+                                        </div>
                                     </div>
+                                    {/* 4. Content Coverage — shows how much of the site has been analyzed */}
                                     <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">Open Issues</div>
-                                        <div className="gleo-kpi-value" style={{ color: totalIssues > 0 ? 'var(--red)' : 'var(--green)' }}>{totalIssues}</div>
-                                        <div className={`gleo-kpi-delta ${totalIssues > 0 ? 'warn' : 'up'}`}>{totalIssues > 0 ? 'Critical or high' : 'All clear'}</div>
+                                        <div className="gleo-kpi-label">Content Coverage</div>
+                                        <div className="gleo-kpi-value">{coveragePct}<span style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-muted)' }}>%</span></div>
+                                        <div className="gleo-kpi-delta" style={{ color: 'var(--fg-muted)' }}>
+                                            {scanResults.length} of {availablePosts.length} posts scanned
+                                        </div>
                                     </div>
                                 </div>
                             </>
