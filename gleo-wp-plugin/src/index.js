@@ -191,12 +191,13 @@ const AnalyticsTab = () => {
     const [sovData, setSovData]           = useState(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [refreshMsg, setRefreshMsg]     = useState(null);
+    const [apiOffline, setApiOffline]     = useState(false);
     const [botFeed, setBotFeed]           = useState([]);
     const siteId = useMemo(() => { try { return new URL(gleoData.siteUrl).hostname; } catch(e) { return ''; } }, []);
     const node_api_url = 'http://localhost:3000';
 
     const handleRefreshSov = () => {
-        setIsRefreshing(true); setRefreshMsg(null);
+        setIsRefreshing(true); setRefreshMsg(null); setApiOffline(false);
         fetch(`${node_api_url}/v1/analytics/sov/refresh`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ site_id: siteId })
@@ -204,13 +205,16 @@ const AnalyticsTab = () => {
         .then(r => r.json())
         .then(() => fetch(`${node_api_url}/v1/analytics/sov?site_id=${siteId}`).then(r => r.json()))
         .then(r => { setSovData(r.data); setRefreshMsg('Updated successfully.'); })
-        .catch(err => setRefreshMsg('Error: ' + err.message))
+        .catch(() => setApiOffline(true))
         .finally(() => setIsRefreshing(false));
     };
 
     useEffect(() => {
-        fetch(`${node_api_url}/v1/analytics/sov?site_id=${siteId}`).then(r => r.json()).then(r => setSovData(r.data)).catch(() => {});
-        fetch(`${node_api_url}/v1/analytics/bot-feed?site_id=${siteId}`).then(r => r.json()).then(r => setBotFeed(r.data || [])).catch(() => {});
+        fetch(`${node_api_url}/v1/analytics/sov?site_id=${siteId}`)
+            .then(r => r.json()).then(r => { setSovData(r.data); setApiOffline(false); })
+            .catch(() => setApiOffline(true));
+        fetch(`${node_api_url}/v1/analytics/bot-feed?site_id=${siteId}`)
+            .then(r => r.json()).then(r => setBotFeed(r.data || [])).catch(() => {});
         const ch = supabase.channel('bot_hits')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bot_traffic_logs', filter: `site_id=eq.${siteId}` },
                 p => setBotFeed(prev => [p.new, ...prev].slice(0, 20)))
@@ -237,6 +241,11 @@ const AnalyticsTab = () => {
                         </button>
                     </div>
                     <div className="gleo-card-body">
+                        {apiOffline && (
+                            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 7, padding: '10px 14px', marginBottom: 12, fontSize: 12.5, color: '#92400e' }}>
+                                <strong>Analytics server is offline.</strong> Start it with <code style={{ background: '#fde68a', padding: '1px 5px', borderRadius: 3 }}>node index.js</code> in the <code style={{ background: '#fde68a', padding: '1px 5px', borderRadius: 3 }}>gleo-node-api</code> folder, then click Refresh.
+                            </div>
+                        )}
                         {refreshMsg && <p style={{ fontSize: 12, color: 'var(--green)', marginBottom: 10 }}>{refreshMsg}</p>}
                         {sovData ? (() => {
                             const shares    = sovData.market_share || [];
@@ -752,7 +761,7 @@ const SettingsPanel = ({ clientId, setClientId, secretKey, setSecretKey, onSave,
 
 // ── Main App ─────────────────────────────────────────────────────────────────
 const App = () => {
-    const [activeTab, setActiveTab]             = useState('dashboard');
+    const [activeTab, setActiveTab]             = useState('scan');
     const [clientId, setClientId]               = useState('');
     const [secretKey, setSecretKey]             = useState('');
     const [isSaving, setIsSaving]               = useState(false);
@@ -851,15 +860,10 @@ const App = () => {
                     </div>
                 </div>
                 <nav className="gleo-nav">
-                    <div className="gleo-nav-group">Overview</div>
-                    <div className={`gleo-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
-                        <IconDashboard/>
-                        Dashboard
-                        {avgScore !== null && <span className="gleo-nav-badge blue">{avgScore}</span>}
-                    </div>
+                    <div className="gleo-nav-group">Optimize</div>
                     <div className={`gleo-nav-item ${activeTab === 'scan' ? 'active' : ''}`} onClick={() => setActiveTab('scan')}>
                         <IconScan/>
-                        Scan Now
+                        Analysis
                         {totalIssues > 0 && <span className="gleo-nav-badge">{totalIssues}</span>}
                     </div>
                     <div className={`gleo-nav-item ${activeTab === 'analytics' ? 'active' : ''}`} onClick={() => setActiveTab('analytics')}>
@@ -877,94 +881,25 @@ const App = () => {
             {/* Main content */}
             <main className="gleo-main">
 
-                {/* Dashboard */}
-                {activeTab === 'dashboard' && (
-                    <div>
-                        <div className="gleo-page-header">
-                            <div>
-                                <h1>Dashboard</h1>
-                                <p className="gleo-page-subtitle">AI visibility overview for {siteHostname}</p>
-                            </div>
-                            <div className="gleo-header-actions">
-                                <button className="gleo-btn gleo-btn-outline" onClick={() => setActiveTab('analytics')}>View Analytics</button>
-                                <button className="gleo-btn gleo-btn-primary" onClick={() => setActiveTab('scan')}>Run Scan</button>
-                            </div>
-                        </div>
-
-                        {scanResults.length > 0 && (
-                            <>
-                                <div className="gleo-section-label">Performance</div>
-                                <div className="gleo-kpi-grid">
-                                    {/* 1. Average GEO Score — the single north-star health number */}
-                                    <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">Avg GEO Score</div>
-                                        <div className="gleo-kpi-value accent">{avgScore !== null ? `${avgScore}/100` : '—'}</div>
-                                        <div className={`gleo-kpi-delta ${avgScore >= 70 ? 'up' : avgScore >= 40 ? 'warn' : 'down'}`}>
-                                            {avgScore >= 70 ? 'Well optimized' : avgScore >= 40 ? 'Room to improve' : 'Needs attention'}
-                                        </div>
-                                    </div>
-                                    {/* 2. Posts Optimized — shows progress at a glance */}
-                                    <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">Posts Optimized</div>
-                                        <div className="gleo-kpi-value">{optimizedCount}<span style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-muted)' }}>/{scanResults.length}</span></div>
-                                        <div className={`gleo-kpi-delta ${optimizedCount === scanResults.length ? 'up' : 'warn'}`}>
-                                            {optimizedCount === scanResults.length ? 'All scoring 70+' : `${scanResults.length - optimizedCount} below threshold`}
-                                        </div>
-                                    </div>
-                                    {/* 3. Quick Wins — immediately actionable, high motivation */}
-                                    <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">Quick Wins</div>
-                                        <div className="gleo-kpi-value" style={{ color: quickWins > 0 ? 'var(--blue)' : 'var(--green)' }}>{quickWins}</div>
-                                        <div className={`gleo-kpi-delta ${quickWins > 0 ? 'up' : 'up'}`}>
-                                            {quickWins > 0 ? 'Auto-fixable now' : 'Nothing left to fix'}
-                                        </div>
-                                    </div>
-                                    {/* 4. Content Coverage — shows how much of the site has been analyzed */}
-                                    <div className="gleo-kpi">
-                                        <div className="gleo-kpi-label">Content Coverage</div>
-                                        <div className="gleo-kpi-value">{coveragePct}<span style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-muted)' }}>%</span></div>
-                                        <div className="gleo-kpi-delta" style={{ color: 'var(--fg-muted)' }}>
-                                            {scanResults.length} of {availablePosts.length} posts scanned
-                                        </div>
-                                    </div>
-                                </div>
-                            </>
-                        )}
-
-                        {scanResults.length > 0 ? (
-                            <>
-                                <div className="gleo-section-label" style={{ marginBottom: 10 }}>
-                                    Content &mdash; {scanResults.length} post{scanResults.length !== 1 ? 's' : ''}
-                                </div>
-                                {scanResults.map(r => <GeoReportCard key={r.post_id} report={r}/>)}
-                            </>
-                        ) : (
-                            <div style={{ textAlign: 'center', padding: '64px 24px', color: 'var(--fg-muted)' }}>
-                                <Globe size={32} style={{ marginBottom: 14, opacity: 0.35 }}/>
-                                <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg)', marginBottom: 6 }}>No scan results yet</p>
-                                <p style={{ fontSize: 13, marginBottom: 20, lineHeight: 1.5 }}>Run a scan to see GEO scores and recommendations.</p>
-                                <button className="gleo-btn gleo-btn-primary" onClick={() => setActiveTab('scan')}>Run your first scan</button>
-                            </div>
-                        )}
-
-                        {showScanModal && (
-                            <ScanCompleteModal resultCount={scanResults.length} scanResults={scanResults}
-                                onClose={() => setShowScanModal(false)}/>
-                        )}
-                    </div>
-                )}
-
-                {/* Scan */}
+                {/* Analysis (formerly Scan + Dashboard merged) */}
                 {activeTab === 'scan' && (
                     <div>
                         <div className="gleo-page-header">
                             <div>
-                                <h1>Scan</h1>
-                                <p className="gleo-page-subtitle">Analyze posts for AI search optimization</p>
+                                <h1>Analysis</h1>
+                                <p className="gleo-page-subtitle">AI search optimization for {siteHostname}</p>
                             </div>
+                            {scanResults.length > 0 && (
+                                <div className="gleo-header-actions">
+                                    <button className="gleo-btn gleo-btn-outline" onClick={() => setActiveTab('analytics')}>View Analytics</button>
+                                </div>
+                            )}
                         </div>
+
                         {saveStatus && <div className={`gleo-notice ${saveStatus.type}`}>{saveStatus.message}</div>}
-                        <div className="gleo-card">
+
+                        {/* Post selection + scan trigger */}
+                        <div className="gleo-card" style={{ marginBottom: 24 }}>
                             <div className="gleo-card-header">
                                 <h3>Select posts to analyze</h3>
                                 <span className="gleo-card-meta">{selectedPosts.length} selected</span>
@@ -1007,6 +942,53 @@ const App = () => {
                                 )}
                             </div>
                         </div>
+
+                        {/* KPIs — shown once results exist */}
+                        {scanResults.length > 0 && (
+                            <>
+                                <div className="gleo-section-label">Performance</div>
+                                <div className="gleo-kpi-grid">
+                                    <div className="gleo-kpi">
+                                        <div className="gleo-kpi-label">Avg GEO Score</div>
+                                        <div className="gleo-kpi-value accent">{avgScore !== null ? `${avgScore}/100` : '—'}</div>
+                                        <div className={`gleo-kpi-delta ${avgScore >= 70 ? 'up' : avgScore >= 40 ? 'warn' : 'down'}`}>
+                                            {avgScore >= 70 ? 'Well optimized' : avgScore >= 40 ? 'Room to improve' : 'Needs attention'}
+                                        </div>
+                                    </div>
+                                    <div className="gleo-kpi">
+                                        <div className="gleo-kpi-label">Posts Optimized</div>
+                                        <div className="gleo-kpi-value">{optimizedCount}<span style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-muted)' }}>/{scanResults.length}</span></div>
+                                        <div className={`gleo-kpi-delta ${optimizedCount === scanResults.length ? 'up' : 'warn'}`}>
+                                            {optimizedCount === scanResults.length ? 'All scoring 70+' : `${scanResults.length - optimizedCount} below threshold`}
+                                        </div>
+                                    </div>
+                                    <div className="gleo-kpi">
+                                        <div className="gleo-kpi-label">Quick Wins</div>
+                                        <div className="gleo-kpi-value" style={{ color: quickWins > 0 ? 'var(--blue)' : 'var(--green)' }}>{quickWins}</div>
+                                        <div className="gleo-kpi-delta up">
+                                            {quickWins > 0 ? 'Auto-fixable now' : 'Nothing left to fix'}
+                                        </div>
+                                    </div>
+                                    <div className="gleo-kpi">
+                                        <div className="gleo-kpi-label">Content Coverage</div>
+                                        <div className="gleo-kpi-value">{coveragePct}<span style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-muted)' }}>%</span></div>
+                                        <div className="gleo-kpi-delta" style={{ color: 'var(--fg-muted)' }}>
+                                            {scanResults.length} of {availablePosts.length} posts scanned
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="gleo-section-label" style={{ marginBottom: 10 }}>
+                                    Results — {scanResults.length} post{scanResults.length !== 1 ? 's' : ''}
+                                </div>
+                                {scanResults.map(r => <GeoReportCard key={r.post_id} report={r}/>)}
+                            </>
+                        )}
+
+                        {showScanModal && (
+                            <ScanCompleteModal resultCount={scanResults.length} scanResults={scanResults}
+                                onClose={() => setShowScanModal(false)}/>
+                        )}
                     </div>
                 )}
 
