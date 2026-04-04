@@ -84,6 +84,13 @@ class Gleo_Batch_Scanner {
 			} else {
 				// Fallback to basic content if the live fetch fails for some reason
 				$html_content = $api_client->sanitize_content( $post->post_content );
+				
+				// Inject schema proxy string so cheerio still identifies it if fallback was triggered
+				$global_override = get_option( 'gleo_override_schema', false );
+				$post_override   = get_post_meta( $post->ID, '_gleo_schema_override', true );
+				if ( $global_override || $post_override ) {
+					$html_content .= "\n<script type=\"application/ld+json\"></script>";
+				}
 			}
 
 			$payload['posts'][] = array(

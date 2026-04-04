@@ -1,12 +1,16 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { GoogleGenAI } = require('@google/genai');
+const { OpenAI } = require('openai');
 
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 const TAVILY_SEARCH_URL = 'https://api.tavily.com/search';
 
 const ai = new GoogleGenAI({
-  apiKey: 'AIzaSyChEiT5lG27TR8icKDoi9c7qLXOVUQhMPI',
+  apiKey: 'AIzaSyBNfDHBGOSb52sPKVhEdpc3hauUxLqQWl8',
+});
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 /**
@@ -16,12 +20,11 @@ async function generateContextualAssets(title, content) {
   const $ = cheerio.load(content || '');
   $('script, style, noscript, svg, path, iframe, nav, footer, header, aside').remove();
   const plainText = $('body').text().replace(/\s+/g, ' ').substring(0, 3000).trim();
-  
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [
-        { role: "user", parts: [{ text: `Article Title: ${title}\nArticle Text excerpt: ${plainText}\n\nGenerate realistic, directly applicable HTML blocks to improve this specific article's Generative Engine Optimization. Output should include a related comparison table, related FAQs, a deeper dive paragraph, a direct Question/Answer block, and a short paragraph of relevant statistics integrated naturally as flowing sentences.` }] }
+        { role: "user", parts: [{ text: `Article Title: ${title}\nArticle Text excerpt: ${plainText}\n\nGenerate realistic, directly applicable HTML blocks to improve this specific article's Generative Engine Optimization. Output should include a related comparison table wrapped in <figure class=\"wp-block-table\"><table>...</table></figure>, related FAQs (H2, H3, P), a deeper dive paragraph, a direct Question/Answer block, and a short paragraph of relevant statistics integrated naturally as flowing sentences.` }] }
       ],
       config: {
         systemInstruction: "You are an SEO web content assistant. Generate valid, semantic WordPress blocks (HTML) based strictly on the provided article context. Never generate generic examples or filler; always use details from the provided text. Return as JSON.",
@@ -44,11 +47,30 @@ async function generateContextualAssets(title, content) {
       return JSON.parse(response.text);
     } catch (e) {
       console.error('[GEO] Failed to parse Gemini response:', e.message);
-      return null;
+      throw new Error("Gemini parsing failed");
     }
   } catch (err) {
-    console.error('[GEO] Failed to generate contextual assets:', err.message);
-    return null; // Graceful fallback
+    console.warn('[GEO] Gemini API failed (likely 403 Permission Denied for key). Falling back seamlessly to OpenAI...', err.message);
+    try {
+        const oaiResponse = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            response_format: { type: "json_object" },
+            messages: [
+                {
+                    role: "system",
+                    content: "You are an expert SEO web content assistant. Generate valid, semantic WordPress blocks (HTML) based strictly on the provided article context. Never generate generic examples or filler; always use specific details and entities from the provided text. Ensure formatting is completely professional. Output strictly JSON with keys: data_table_html, faq_html, depth_html, qa_html, authority_html."
+                },
+                {
+                    role: "user",
+                    content: `Article Title: ${title}\nArticle Text excerpt: ${plainText}\n\nGenerate realistic, directly applicable HTML blocks to improve this specific article's Generative Engine Optimization. Output should include a related comparison table wrapped in <figure class=\"wp-block-table\"><table>...</table></figure>, related FAQs (H2, H3, P), a deeper dive paragraph, a direct Question/Answer block, and a short paragraph of relevant statistics integrated naturally as flowing sentences.`
+                }
+            ]
+        });
+        return JSON.parse(oaiResponse.choices[0].message.content);
+    } catch (fallbackErr) {
+        console.error('[GEO] Both AI sources failed to generate contextual assets:', fallbackErr.message);
+        return null; // Graceful fallback to generic PHP templates out of desperation
+    }
   }
 }
 
@@ -150,20 +172,73 @@ function calculateBrandInclusion(results, siteUrl, postTitle) {
 }
 
 /**
- * Analyzes the post live HTML for key GEO quality signals using Cheerio.
+ * Analyzes the post live HTML for the 5-pillar GEO quality signals using Cheerio.
  */
 function analyzeContentSignals(htmlContent, title) {
   const $ = cheerio.load(htmlContent || '');
   
-  // Extract plain text for word counts and specific text patterns
-  // Remove scripts and styles before extracting text
+  // Re-load original HTML to check head for schema
+  const $full = cheerio.load(htmlContent || '');
+  
+  // Remove noise
   $('script, style, noscript, nav, footer, header, aside').remove();
   const plainText = $('body').text() || '';
   const cleanText = plainText.replace(/\s+/g, ' ').trim();
-  
   const wordCount = cleanText.split(/\s+/).filter(w => w.length > 0).length;
 
-  // Check for structured elements via proper standard DOM tags
+  // ── 1. Technical Crawlability ──
+  const images = $('img');
+  const imageCount = images.length;
+  const imagesWithAlt = images.filter((i, el) => {
+    const alt = $(el).attr('alt');
+    return alt && alt.trim().length > 3;
+  }).length;
+  const altTextCoverage = imageCount > 0 ? Math.round((imagesWithAlt / imageCount) * 100) : 100;
+  
+  const hasMetaRobotsBlock = $full('meta[name="robots"][content*="noindex"]').length > 0 ||
+                              $full('meta[name="robots"][content*="nofollow"]').length > 0;
+  const hasLlmsTxtRef = /llms\.txt/i.test(htmlContent);
+
+  // ── 2. Structured Data & Schema ──
+  const schemaScripts = $full('script[type="application/ld+json"]');
+  const hasSchema = schemaScripts.length > 0;
+  let hasFaqSchema = false;
+  let hasOrgSchema = false;
+  schemaScripts.each((i, el) => {
+    const txt = $(el).text();
+    if (/FAQPage/i.test(txt)) hasFaqSchema = true;
+    if (/Organization|LocalBusiness|Product|Person/i.test(txt)) hasOrgSchema = true;
+  });
+
+  // ── 3. Content Quality ──
+  const paragraphs = $('p').map((i, el) => $(el).text().trim()).get().filter(p => p.length > 20);
+  const avgParagraphLength = paragraphs.length > 0
+    ? Math.round(paragraphs.reduce((sum, p) => sum + p.split(/\s+/).length, 0) / paragraphs.length)
+    : 0;
+  
+  // Direct answer detection: first substantial paragraph is 60-100 words (inverted pyramid)
+  const firstParaWords = paragraphs.length > 0 ? paragraphs[0].split(/\s+/).length : 0;
+  const hasDirectAnswer = firstParaWords >= 40 && firstParaWords <= 120;
+  
+  // Conversational query targeting
+  const hasConversationalQueries = /\b(best|how to|what is|why|can i|should i|compared to|vs\.?|for a)\b/i.test(cleanText);
+  
+  // Check for TL;DR or summary blocks
+  const hasTldr = /tl;?dr|summary|key takeaway|at a glance|quick answer/i.test(cleanText);
+  
+  const hasDirectAnswers = /\b(is|are|was|were|can|does|do|will|how|what|why|when|where)\b[^.?]*\?/i.test(cleanText);
+
+  // ── 4. Credibility ──
+  const statsMatches = cleanText.match(/\d+%|\d+\s*(percent|million|billion|thousand)/ig);
+  const statCount = statsMatches ? statsMatches.length : 0;
+  const hasStatistics = statCount > 0;
+  
+  const citationCount = $('a[href^="http"]').length;
+  const hasCitations = citationCount > 0;
+  
+  const hasQuotes = $('blockquote').length > 0 || /"[^"]{20,}"/.test(cleanText);
+
+  // ── 5. AI-Specific Formatting ──
   const headingCount = $('h2, h3, h4, h5, h6').length;
   const hasHeadings = headingCount > 0;
   
@@ -172,85 +247,122 @@ function analyzeContentSignals(htmlContent, title) {
   
   const hasTable = $('table').length > 0;
   
-  const imageCount = $('img').length;
-  const hasImages = imageCount > 0;
-  
-  // Re-load original HTML to check head for schema
-  const $full = cheerio.load(htmlContent || '');
-  const hasSchema = $full('script[type="application/ld+json"]').length > 0;
-  
   const hasFAQ = /faq|frequently\s+asked|common\s+questions/i.test(cleanText);
-  const hasStatistics = /\d+%|\d+\s*(percent|million|billion)/i.test(cleanText);
   
-  const citationCount = $('a[href^="http"]').length;
-  const hasCitations = citationCount > 0;
-
-  // Check for answer-ready formatting (direct answers to questions)
-  const hasDirectAnswers = /\b(is|are|was|were|can|does|do|will|how|what|why|when|where)\b[^.?]*\?/i.test(cleanText);
-
-  // Paragraph structure
-  const paragraphs = $('p').map((i, el) => $(el).text().trim()).get().filter(p => p.length > 20);
-  const avgParagraphLength = paragraphs.length > 0
-    ? Math.round(paragraphs.reduce((sum, p) => sum + p.split(/\s+/).length, 0) / paragraphs.length)
-    : 0;
+  // Long paragraph detection (paragraphs > 80 words)
+  const longParagraphs = paragraphs.filter(p => p.split(/\s+/).length > 80).length;
 
   return {
     word_count: wordCount,
+    // Technical
+    image_count: imageCount,
+    images_with_alt: imagesWithAlt,
+    alt_text_coverage: altTextCoverage,
+    has_meta_robots_block: hasMetaRobotsBlock,
+    has_llms_txt: hasLlmsTxtRef,
+    // Schema
+    has_schema: hasSchema,
+    has_faq_schema: hasFaqSchema,
+    has_org_schema: hasOrgSchema,
+    // Content Quality
+    has_direct_answer: hasDirectAnswer,
+    has_conversational_queries: hasConversationalQueries,
+    has_tldr: hasTldr,
+    has_direct_answers: hasDirectAnswers,
+    first_para_words: firstParaWords,
+    // Credibility
+    has_statistics: hasStatistics,
+    stat_count: statCount,
+    has_citations: hasCitations,
+    citation_count: citationCount,
+    has_quotes: hasQuotes,
+    // AI Formatting
     has_headings: hasHeadings,
     heading_count: headingCount,
     has_lists: hasList,
     list_item_count: listCount,
     has_table: hasTable,
-    has_images: hasImages,
-    image_count: imageCount,
-    has_schema: hasSchema,
     has_faq: hasFAQ,
-    has_statistics: hasStatistics,
-    has_citations: hasCitations,
-    citation_count: citationCount,
-    has_direct_answers: hasDirectAnswers,
+    has_images: imageCount > 0,
     paragraph_count: paragraphs.length,
-    avg_paragraph_length: avgParagraphLength
+    avg_paragraph_length: avgParagraphLength,
+    long_paragraphs: longParagraphs
   };
 }
 
 /**
- * Calculates the overall GEO score (0-100).
+ * Calculates the overall GEO score (0-100) using the 5-pillar framework.
  */
 function calculateGeoScore(signals, brandRate, tavilyResults) {
   let score = 0;
 
-  // Content length (max 15 pts)
-  if (signals.word_count >= 2000) score += 15;
-  else if (signals.word_count >= 1000) score += 10;
-  else if (signals.word_count >= 500) score += 5;
-  else score += 2;
+  // ── 1. Technical Crawlability (max 15) ──
+  // Alt text coverage: 5 pts
+  if (signals.alt_text_coverage >= 90) score += 5;
+  else if (signals.alt_text_coverage >= 50) score += 3;
+  else if (signals.image_count === 0) score += 5; // No images = no penalty
+  
+  // No robots blocking: 5 pts
+  if (!signals.has_meta_robots_block) score += 5;
+  
+  // llms.txt: 5 pts
+  if (signals.has_llms_txt) score += 5;
 
-  // Structure signals (max 25 pts)
-  if (signals.has_headings) score += 8;
-  if (signals.heading_count >= 3) score += 4;
-  if (signals.has_lists) score += 5;
-  if (signals.has_table) score += 4;
-  if (signals.has_faq) score += 4;
-
-  // Rich media (max 10 pts)
-  if (signals.has_images) score += 5;
-  if (signals.image_count >= 3) score += 5;
-
-  // Authority signals (max 15 pts)
-  if (signals.has_statistics) score += 5;
-  if (signals.has_citations) score += 5;
-  if (signals.citation_count >= 3) score += 5;
-
-  // Schema (max 10 pts)
+  // ── 2. Structured Data & Schema (max 20) ──
   if (signals.has_schema) score += 10;
+  if (signals.has_faq_schema) score += 5;
+  if (signals.has_org_schema) score += 5;
 
-  // Answer readiness (max 10 pts)
-  if (signals.has_direct_answers) score += 5;
-  if (signals.avg_paragraph_length <= 60 && signals.avg_paragraph_length > 0) score += 5;
+  // ── 3. Content Quality (max 30) ──
+  // Depth: 10 pts
+  if (signals.word_count >= 2000) score += 10;
+  else if (signals.word_count >= 1200) score += 7;
+  else if (signals.word_count >= 600) score += 4;
+  else if (signals.word_count > 0) score += 1;
+  
+  // Direct answer / inverted pyramid: 10 pts
+  if (signals.has_direct_answer) score += 5;
+  if (signals.has_tldr) score += 5;
+  
+  // Conversational query targeting: 5 pts
+  if (signals.has_conversational_queries) score += 3;
+  if (signals.has_direct_answers) score += 2;
+  
+  // Content specificity: 5 pts
+  if (signals.word_count >= 800 && signals.has_statistics) score += 3;
+  if (signals.has_quotes) score += 2;
 
-  // Brand visibility from Tavily (max 15 pts)
-  score += Math.min(15, Math.round(brandRate * 1.5));
+  // ── 4. Credibility (max 15) ──
+  // Statistics: 5 pts
+  if (signals.stat_count >= 3) score += 5;
+  else if (signals.stat_count >= 1) score += 3;
+  
+  // Outbound citations: 5 pts
+  if (signals.citation_count >= 3) score += 5;
+  else if (signals.citation_count >= 1) score += 3;
+  
+  // Expert quotes: 5 pts
+  if (signals.has_quotes) score += 5;
+
+  // ── 5. AI-Specific Formatting (max 20) ──
+  // Semantic headings: 5 pts
+  if (signals.heading_count >= 4) score += 5;
+  else if (signals.heading_count >= 2) score += 3;
+  else if (signals.has_headings) score += 1;
+  
+  // Short paragraphs: 5 pts
+  if (signals.long_paragraphs === 0 && signals.paragraph_count > 0) score += 5;
+  else if (signals.long_paragraphs <= 2) score += 3;
+  
+  // Lists: 4 pts
+  if (signals.list_item_count >= 3) score += 4;
+  else if (signals.has_lists) score += 2;
+
+  // FAQ block: 3 pts
+  if (signals.has_faq) score += 3;
+  
+  // Comparison tables: 3 pts
+  if (signals.has_table) score += 3;
 
   return Math.min(100, score);
 }
@@ -300,143 +412,133 @@ function generateJsonLd(title, content, siteUrl) {
 }
 
 /**
- * Generates specific, actionable GEO recommendations with individual scores.
+ * Generates specific, actionable GEO recommendations based on the 5-pillar framework.
  */
 function generateRecommendations(signals, brandRate, geoScore) {
   const recs = [];
 
-  // Critical issues
-  if (!signals.has_headings) {
-    recs.push({
-      priority: 'critical',
-      area: 'Structure',
-      score: 0,
-      maxScore: 12,
-      message: 'Add semantic headings (H2, H3) to break up your content. AI engines use headings to understand topic hierarchy.'
-    });
+  // ── 1. Technical Crawlability ──
+  {
+    let score = 0;
+    if (!signals.has_meta_robots_block) score += 5;
+    if (signals.alt_text_coverage >= 90 || signals.image_count === 0) score += 5;
+    if (signals.has_llms_txt) score += 5;
+    
+    if (score < 15) {
+      const issues = [];
+      if (signals.has_meta_robots_block) issues.push('Remove robots meta noindex/nofollow — AI bots need access');
+      if (signals.image_count > 0 && signals.alt_text_coverage < 90) issues.push(`Only ${signals.alt_text_coverage}% of images have descriptive alt text`);
+      if (!signals.has_llms_txt) issues.push('Create an llms.txt file so AI bots know what to index');
+      recs.push({
+        priority: score <= 5 ? 'critical' : 'medium',
+        area: 'Technical Crawlability',
+        score, maxScore: 15,
+        message: issues.join('. ') + '.'
+      });
+    }
   }
 
-  if (signals.word_count < 500) {
-    recs.push({
-      priority: 'critical',
-      area: 'Content Depth',
-      score: signals.word_count <= 0 ? 0 : Math.round((signals.word_count / 1500) * 15),
-      maxScore: 15,
-      message: `Your post is only ${signals.word_count} words. AI engines favor comprehensive content. Aim for 1,500+ words with detailed explanations.`
-    });
+  // ── 2. Structured Data & Schema ──
+  {
+    let score = 0;
+    if (signals.has_schema) score += 10;
+    if (signals.has_faq_schema) score += 5;
+    if (signals.has_org_schema) score += 5;
+    
+    if (score < 20) {
+      const issues = [];
+      if (!signals.has_schema) issues.push('Deploy JSON-LD schema markup so AI understands your content');
+      if (!signals.has_faq_schema) issues.push('Add FAQPage schema — matches the Q&A format AI loves');
+      if (!signals.has_org_schema) issues.push('Add Organization/LocalBusiness/Product schemas as needed');
+      recs.push({
+        priority: !signals.has_schema ? 'critical' : 'medium',
+        area: 'Structured Data & Schema',
+        score, maxScore: 20,
+        message: issues.join('. ') + '.'
+      });
+    }
   }
 
-  if (!signals.has_schema) {
-    recs.push({
-      priority: 'critical',
-      area: 'Schema Markup',
-      score: 0,
-      maxScore: 10,
-      message: 'No JSON-LD schema detected. Adding structured data helps AI engines understand your content type and extract key facts.'
-    });
+  // ── 3. Content Quality ──
+  {
+    let score = 0;
+    if (signals.word_count >= 2000) score += 10;
+    else if (signals.word_count >= 1200) score += 7;
+    else if (signals.word_count >= 600) score += 4;
+    else if (signals.word_count > 0) score += 1;
+    if (signals.has_direct_answer) score += 5;
+    if (signals.has_tldr) score += 5;
+    if (signals.has_conversational_queries) score += 3;
+    if (signals.has_direct_answers) score += 2;
+    if (signals.word_count >= 800 && signals.has_statistics) score += 3;
+    if (signals.has_quotes) score += 2;
+    score = Math.min(30, score);
+    
+    if (score < 30) {
+      const issues = [];
+      if (signals.word_count < 1200) issues.push(`Content is ${signals.word_count} words — aim for 1,200+ with depth`);
+      if (!signals.has_direct_answer) issues.push('Put a 60-100 word direct answer at the very top (inverted pyramid)');
+      if (!signals.has_tldr) issues.push('Add a TL;DR or "Key Takeaways" summary block');
+      if (!signals.has_conversational_queries) issues.push('Target long-tail conversational queries users ask AI');
+      recs.push({
+        priority: score <= 10 ? 'critical' : score <= 20 ? 'high' : 'medium',
+        area: 'Content Quality',
+        score, maxScore: 30,
+        message: issues.join('. ') + '.'
+      });
+    }
   }
 
-  // High priority
-  if (!signals.has_lists) {
-    recs.push({
-      priority: 'high',
-      area: 'Formatting',
-      score: 0,
-      maxScore: 5,
-      message: 'Add bullet or numbered lists. AI engines frequently extract list-formatted content for answer generation.'
-    });
+  // ── 4. Credibility ──
+  {
+    let score = 0;
+    if (signals.stat_count >= 3) score += 5;
+    else if (signals.stat_count >= 1) score += 3;
+    if (signals.citation_count >= 3) score += 5;
+    else if (signals.citation_count >= 1) score += 3;
+    if (signals.has_quotes) score += 5;
+    
+    if (score < 15) {
+      const issues = [];
+      if (signals.stat_count < 3) issues.push('Add unique first-party statistics — AI craves data it hasn\'t seen');
+      if (signals.citation_count < 3) issues.push('Add outbound links to authoritative sources for credibility');
+      if (!signals.has_quotes) issues.push('Include expert quotes or real testimonials');
+      recs.push({
+        priority: score <= 5 ? 'high' : 'medium',
+        area: 'Credibility',
+        score, maxScore: 15,
+        message: issues.join('. ') + '.'
+      });
+    }
   }
 
-  if (!signals.has_statistics) {
-    recs.push({
-      priority: 'high',
-      area: 'Authority',
-      score: 0,
-      maxScore: 5,
-      message: 'Include specific statistics, percentages, or data points. Quantitative claims increase citation likelihood by AI engines.'
-    });
-  }
-
-  if (!signals.has_citations) {
-    recs.push({
-      priority: 'high',
-      area: 'Credibility',
-      score: 0,
-      maxScore: 15,
-      message: 'Add outbound citations to authoritative sources. AI engines weight content higher when it references trusted data.'
-    });
-  }
-
-  if (brandRate <= 2) {
-    recs.push({
-      priority: 'high',
-      area: 'Brand Visibility',
-      score: Math.round(brandRate * 1.5),
-      maxScore: 15,
-      message: 'Your brand has low visibility in AI search results for this topic. Increase topical authority by publishing more related content and building backlinks.'
-    });
-  }
-
-  // Medium priority
-  if (!signals.has_faq) {
-    recs.push({
-      priority: 'medium',
-      area: 'FAQ Section',
-      score: 0,
-      maxScore: 4,
-      message: 'Add an FAQ section. AI engines frequently pull direct question-answer pairs into generated responses.'
-    });
-  }
-
-  if (!signals.has_table) {
-    recs.push({
-      priority: 'medium',
-      area: 'Data Tables',
-      score: 0,
-      maxScore: 4,
-      message: 'Consider adding comparison tables or data tables. Structured tabular data is highly extractable by AI engines.'
-    });
-  }
-
-  if (!signals.has_images || signals.image_count < 2) {
-    recs.push({
-      priority: 'medium',
-      area: 'Visual Content',
-      score: signals.has_images ? 5 : 0,
-      maxScore: 10,
-      message: 'Add more images with descriptive alt text. Multimodal AI engines use image context to enrich answers.'
-    });
-  }
-
-  if (signals.avg_paragraph_length > 80) {
-    recs.push({
-      priority: 'medium',
-      area: 'Readability',
-      score: 0,
-      maxScore: 5,
-      message: 'Your paragraphs are too long. Break them into shorter chunks (40-60 words). AI engines prefer concise, scannable text blocks.'
-    });
-  }
-
-  if (!signals.has_direct_answers) {
-    recs.push({
-      priority: 'medium',
-      area: 'Answer Readiness',
-      score: 0,
-      maxScore: 5,
-      message: 'Include direct question-and-answer patterns in your content. This makes it easier for AI engines to extract and cite your content.'
-    });
-  }
-
-  // Positive feedback
-  if (geoScore >= 70) {
-    recs.push({
-      priority: 'positive',
-      area: 'Overall',
-      score: geoScore,
-      maxScore: 100,
-      message: 'Great work! This post has strong GEO fundamentals. Focus on the remaining recommendations to push it higher.'
-    });
+  // ── 5. AI-Specific Formatting ──
+  {
+    let score = 0;
+    if (signals.heading_count >= 4) score += 5;
+    else if (signals.heading_count >= 2) score += 3;
+    else if (signals.has_headings) score += 1;
+    if (signals.long_paragraphs === 0 && signals.paragraph_count > 0) score += 5;
+    else if (signals.long_paragraphs <= 2) score += 3;
+    if (signals.list_item_count >= 3) score += 4;
+    else if (signals.has_lists) score += 2;
+    if (signals.has_faq) score += 3;
+    if (signals.has_table) score += 3;
+    
+    if (score < 20) {
+      const issues = [];
+      if (signals.heading_count < 4) issues.push(`Only ${signals.heading_count} headings — add H2s every ~3 paragraphs`);
+      if (signals.long_paragraphs > 0) issues.push(`${signals.long_paragraphs} paragraph(s) exceed 80 words — shorten them`);
+      if (!signals.has_lists) issues.push('Convert dense paragraphs into bulleted lists');
+      if (!signals.has_faq) issues.push('Inject a contextual FAQ block near the end');
+      if (!signals.has_table) issues.push('Add comparison tables — AI loves structured tabular data');
+      recs.push({
+        priority: score <= 8 ? 'high' : 'medium',
+        area: 'AI-Specific Formatting',
+        score, maxScore: 20,
+        message: issues.join('. ') + '.'
+      });
+    }
   }
 
   return recs;

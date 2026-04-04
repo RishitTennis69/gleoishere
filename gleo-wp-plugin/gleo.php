@@ -124,10 +124,17 @@ function gleo_admin_scripts( $hook ) {
 			$seo_plugin_name = 'RankMath';
 		}
 
+		$top_posts = get_posts( array( 'posts_per_page' => 6, 'post_status' => 'publish' ) );
+		$posts_data = array();
+		foreach ( $top_posts as $p ) {
+			$posts_data[] = array( 'ID' => $p->ID, 'title' => $p->post_title );
+		}
+
 		wp_localize_script( 'gleo-admin-app', 'gleoData', array(
 			'seoPluginActive' => $seo_plugin_active,
 			'seoPluginName'   => $seo_plugin_name,
 			'siteUrl'         => get_site_url(),
+			'posts'           => $posts_data,
 		) );
 	}
 }
