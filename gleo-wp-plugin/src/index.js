@@ -1,0 +1,1338 @@
+import { render, useState, useEffect, useMemo, useRef } from '@wordpress/element';
+import apiFetch from '@wordpress/api-fetch';
+import { createClient } from '@supabase/supabase-js';
+import { Activity, Zap, ShieldCheck } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import './index.css';
+
+/* global gleoData */
+const seoPluginActive = typeof gleoData !== 'undefined' ? gleoData.seoPluginActive : false;
+const seoPluginName  = typeof gleoData !== 'undefined' ? gleoData.seoPluginName  : '';
+
+const gleoSupabase =
+	typeof gleoData !== 'undefined' && gleoData.supabaseUrl && gleoData.supabaseAnonKey
+		? createClient( gleoData.supabaseUrl, gleoData.supabaseAnonKey )
+		: null;
+
+// ── Fix config ──────────────────────────────────────────────────────────────
+const FIX_CONFIG = {
+    schema:           { label: 'Deploy Schema',         needsInput: false, successMsg: 'JSON-LD schema markup is now active on this post.' },
+    structure:        { label: 'Add Headings',          needsInput: false, successMsg: 'Semantic H2 headings have been inserted every ~3 paragraphs.' },
+    formatting:       { label: 'Add Lists',             needsInput: false, successMsg: 'Dense paragraphs have been converted into bulleted lists.' },
+    readability:      { label: 'Shorten Paragraphs',    needsInput: false, successMsg: 'Long paragraphs (80+ words) have been split into shorter chunks.' },
+    content_depth:    { label: 'Expand Content',        needsInput: false, successMsg: 'In-depth paragraphs have been added to strengthen content quality.' },
+    data_tables:      { label: 'Add Table',             needsInput: false, successMsg: 'A contextual comparison table has been added to your post.' },
+    faq:              { label: 'Add FAQ Block',         needsInput: false, successMsg: 'A contextual FAQ section (including Q&A) has been added to your post.' },
+    authority:        { label: 'Add Statistics',        needsInput: false, successMsg: 'A statistics callout with relevant data points has been added.' },
+    credibility:      { label: 'Add Sources',           needsInput: true,  prompt: 'Paste URLs to authoritative sources (one per line):', inputType: 'lines', successMsg: 'A Sources & References section has been added to your post.' },
+};
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+const scoreChipClass = s => s >= 70 ? 'chip-hi' : s >= 40 ? 'chip-md' : 'chip-lo';
+
+// ── SVG icons ────────────────────────────────────────────────────────────────
+const IconScan = () => (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="6.5" cy="6.5" r="4"/>
+        <path d="M11 11l2.5 2.5"/>
+    </svg>
+);
+const IconAnalytics = () => (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <polyline points="1,11 4.5,7 7.5,9 11,4 14,6"/>
+    </svg>
+);
+const IconSettings = () => (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="7.5" cy="5" r="3"/>
+        <path d="M2.5 13.5c0-2.8 2.2-5 5-5s5 2.2 5 5"/>
+    </svg>
+);
+const IconChevron = ({ open }) => (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6"
+        style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', flexShrink: 0 }}>
+        <path d="M4.5 3L7.5 6L4.5 9"/>
+    </svg>
+);
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+const SuccessToast = ({ message, onDismiss }) => {
+    useEffect(() => { const t = setTimeout(onDismiss, 5000); return () => clearTimeout(t); }, [onDismiss]);
+    return (
+        <div className="gleo-toast">
+            <span className="gleo-toast-icon">&#10003;</span>
+            <span>{message}</span>
+        </div>
+    );
+};
+
+// ── Input Modal ──────────────────────────────────────────────────────────────
+const InputModal = ({ title, prompt, inputType, onSubmit, onCancel }) => {
+    const [value, setValue] = useState('');
+    const submit = () => {
+        if (!value.trim()) return;
+        onSubmit(inputType === 'lines' ? value.split('\n').map(l => l.trim()).filter(Boolean) : value.trim());
+    };
+    return (
+        <div className="gleo-modal-backdrop" onClick={onCancel}>
+            <div className="gleo-modal" onClick={e => e.stopPropagation()}>
+                <h3>{title}</h3>
+                <p className="gleo-modal-prompt">{prompt}</p>
+                <textarea className="gleo-modal-input" rows={inputType === 'lines' ? 5 : 3}
+                    value={value} onChange={e => setValue(e.target.value)}
+                    placeholder={inputType === 'lines' ? 'One item per line…' : 'Type here…'} />
+                <div className="gleo-modal-actions">
+                    <button className="gleo-btn gleo-btn-outline" onClick={onCancel}>Cancel</button>
+                    <button className="gleo-btn gleo-btn-primary" onClick={submit} disabled={!value.trim()}>Apply Fix</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ── SVG Line Chart (per-post history) ───────────────────────────────────────
+const LineChart = ({ data }) => {
+	if ( ! data || data.length === 0 ) {
+		return <p className="gleo-no-data">No historical data yet. Run your first scan to start tracking.</p>;
+	}
+	const W = 680, H = 210;
+	const pad = { top: 18, right: 24, bottom: 36, left: 36 };
+	const cW = W - pad.left - pad.right;
+	const cH = H - pad.top - pad.bottom;
+	const xStep = data.length > 1 ? cW / ( data.length - 1 ) : cW / 2;
+	const brandPts = data.map( ( d, i ) => ( { x: pad.left + i * xStep, y: pad.top + cH - ( d.avg_brand_rate / 10 ) * cH } ) );
+	const scorePts = data.map( ( d, i ) => ( { x: pad.left + i * xStep, y: pad.top + cH - ( d.avg_geo_score / 100 ) * cH } ) );
+	const path = pts => pts.map( ( p, i ) => `${ i === 0 ? 'M' : 'L' }${ p.x },${ p.y }` ).join( ' ' );
+	return (
+		<div className="gleo-chart-wrap">
+			<svg viewBox={ `0 0 ${ W } ${ H }` } className="gleo-line-chart">
+				{ [ 0, 25, 50, 75, 100 ].map( v => {
+					const y = pad.top + cH - ( v / 100 ) * cH;
+					return <line key={ v } x1={ pad.left } y1={ y } x2={ W - pad.right } y2={ y } stroke="#e2e8f0" strokeWidth="1"/>;
+				} ) }
+				<path d={ path( brandPts ) } fill="none" stroke="#0369a1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+				{ brandPts.map( ( p, i ) => <circle key={ i } cx={ p.x } cy={ p.y } r="3.5" fill="#0369a1"/> ) }
+				<path d={ path( scorePts ) } fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+				{ scorePts.map( ( p, i ) => <circle key={ i } cx={ p.x } cy={ p.y } r="3.5" fill="#059669"/> ) }
+				{ data.map( ( d, i ) => (
+					<text key={ i } x={ pad.left + i * xStep } y={ H - 8 } textAnchor="middle" fontSize="10" fill="#9ca3af">
+						{ d.scan_date ? d.scan_date.substring( 5 ) : `#${ i + 1 }` }
+					</text>
+				) ) }
+				{ [ 0, 50, 100 ].map( v => (
+					<text key={ v } x={ pad.left - 6 } y={ pad.top + cH - ( v / 100 ) * cH + 4 }
+						textAnchor="end" fontSize="10" fill="#9ca3af">{ v }</text>
+				) ) }
+			</svg>
+			<div className="gleo-chart-legend">
+				<span className="gleo-legend-item"><span className="gleo-legend-dot" style={ { background: '#0369a1' } }></span>AI Visibility (×10)</span>
+				<span className="gleo-legend-item"><span className="gleo-legend-dot" style={ { background: '#059669' } }></span>GEO Score</span>
+			</div>
+		</div>
+	);
+};
+
+const PostHistoryChart = ( { postId, showHeading = true } ) => {
+	const [ history, setHistory ] = useState( [] );
+	const [ loading, setLoading ] = useState( true );
+	useEffect( () => {
+		setLoading( true );
+		apiFetch( { path: `/gleo/v1/analytics/history?post_id=${ postId }` } )
+			.then( res => setHistory( res.history || [] ) )
+			.finally( () => setLoading( false ) );
+	}, [ postId ] );
+	return (
+		<div className={ showHeading ? 'gleo-section' : 'gleo-post-history-chart-inline' }>
+			{ showHeading ? (
+				<>
+					<h4>AI Visibility Over Time</h4>
+					<p style={ { fontSize: 12.5, color: 'var(--fg-muted)', marginBottom: 10, marginTop: -4 } }>
+						Tracks how often this post appears in AI-generated answers across scans.
+					</p>
+				</>
+			) : (
+				<p style={ { fontSize: 12.5, color: 'var(--fg-muted)', marginBottom: 10, marginTop: 0 } }>
+					Tracks AI visibility and GEO score across scans for this post.
+				</p>
+			) }
+			{ loading ? <p style={ { fontSize: 13, color: 'var(--fg-muted)' } }>Loading…</p> : <LineChart data={ history }/> }
+		</div>
+	);
+};
+
+// ── Analytics tab ───────────────────────────────────────────────────────────
+const AnalyticsTab = () => {
+	const [ sovData, setSovData ] = useState( null );
+	const [ isRefreshing, setIsRefreshing ] = useState( false );
+	const [ refreshMsg, setRefreshMsg ] = useState( null );
+	const [ apiOffline, setApiOffline ] = useState( false );
+	const [ botFeed, setBotFeed ] = useState( [] );
+	const [ scanChartRows, setScanChartRows ] = useState( [] );
+	const siteId = useMemo( () => {
+		try {
+			return new URL( typeof gleoData !== 'undefined' ? gleoData.siteUrl : '' ).hostname;
+		} catch ( e ) {
+			return '';
+		}
+	}, [] );
+	const nodeBase = useMemo( () => ( typeof gleoData !== 'undefined' && gleoData.nodeApiUrl ) ? gleoData.nodeApiUrl : 'http://localhost:3000', [] );
+
+	const handleRefreshSov = () => {
+		setIsRefreshing( true ); setRefreshMsg( null ); setApiOffline( false );
+		const queries = ( typeof gleoData !== 'undefined' ? ( gleoData.posts || [] ) : [] ).map( p => p.title );
+		fetch( `${ nodeBase }/v1/analytics/sov/refresh`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify( { site_id: siteId, queries } ),
+		} )
+			.then( r => r.json() )
+			.then( r => {
+				if ( r.data ) {
+					setSovData( r.data );
+					setRefreshMsg( 'AI Visibility analysis complete.' );
+				} else {
+					setRefreshMsg( r.message || 'Updated.' );
+				}
+			} )
+			.catch( () => setApiOffline( true ) )
+			.finally( () => setIsRefreshing( false ) );
+	};
+
+	useEffect( () => {
+		fetch( `${ nodeBase }/v1/analytics/sov?site_id=${ siteId }` )
+			.then( r => r.json() ).then( r => { setSovData( r.data ); setApiOffline( false ); } )
+			.catch( () => setApiOffline( true ) );
+		fetch( `${ nodeBase }/v1/analytics/bot-feed?site_id=${ siteId }` )
+			.then( r => r.json() ).then( r => setBotFeed( r.data || [] ) ).catch( () => {} );
+		let ch = null;
+		if ( gleoSupabase && siteId ) {
+			ch = gleoSupabase.channel( 'bot_hits' )
+				.on( 'postgres_changes', { event: 'INSERT', schema: 'public', table: 'bot_traffic_logs', filter: `site_id=eq.${ siteId }` },
+					payload => setBotFeed( prev => [ payload.new, ...prev ].slice( 0, 20 ) ) )
+				.subscribe();
+		}
+		return () => {
+			if ( gleoSupabase && ch ) {
+				gleoSupabase.removeChannel( ch );
+			}
+		};
+	}, [ siteId, nodeBase ] );
+
+	useEffect( () => {
+		apiFetch( { path: '/gleo/v1/scan/status' } )
+			.then( res => {
+				const rows = ( res.results || [] ).filter( r => r.post_id && r.result );
+				setScanChartRows( rows.slice( 0, 8 ) );
+			} )
+			.catch( () => {} );
+	}, [] );
+
+	return (
+		<div>
+			<div className="gleo-page-header">
+				<div>
+					<h1>Analytics</h1>
+					<p className="gleo-page-subtitle">AI visibility and crawler activity</p>
+				</div>
+			</div>
+			<div className="gleo-analytics-grid">
+				<div className="gleo-card">
+					<div className="gleo-card-header">
+						<h3>AI Visibility Share</h3>
+						<button className="gleo-btn gleo-btn-outline" style={ { fontSize: 12, padding: '5px 12px' } }
+							onClick={ handleRefreshSov } disabled={ isRefreshing }>
+							{ isRefreshing ? 'Running…' : 'Refresh' }
+						</button>
+					</div>
+					<div className="gleo-card-body">
+						{ apiOffline && (
+							<div style={ { background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 7, padding: '10px 14px', marginBottom: 12, fontSize: 12.5, color: '#92400e' } }>
+								<strong>Analytics server is offline.</strong> Start <code style={ { background: '#fde68a', padding: '1px 5px', borderRadius: 3 } }>node index.js</code> in <code style={ { background: '#fde68a', padding: '1px 5px', borderRadius: 3 } }>gleo-node-api</code>, then click Refresh.
+							</div>
+						) }
+						{ refreshMsg && <p style={ { fontSize: 12, color: 'var(--green)', marginBottom: 10 } }>{ refreshMsg }</p> }
+						{ sovData ? ( () => {
+							const shares = sovData.market_share || [];
+							const yourIdx = shares.findIndex( s => s && s.isYou );
+							const yourEntry = yourIdx >= 0 ? shares[ yourIdx ] : ( shares[ 0 ] || { name: 'Your Site', percentage: 0 } );
+							const rank = ( yourIdx >= 0 ? yourIdx : 0 ) + 1;
+							return (
+								<div>
+									<div style={ { textAlign: 'center', padding: '16px 0 20px' } }>
+										<div style={ { fontSize: 48, fontWeight: 800, color: 'var(--blue)', letterSpacing: -2, lineHeight: 1 } }>
+											{ yourEntry.percentage }%
+										</div>
+										<p style={ { fontSize: 12.5, color: 'var(--fg-muted)', marginTop: 5 } }>of AI answers mention your site</p>
+										<span style={ {
+											display: 'inline-block', marginTop: 8,
+											fontSize: 11.5, fontWeight: 700,
+											background: rank === 1 ? '#dcfce7' : '#fef9c3',
+											color: rank === 1 ? '#166534' : '#7c4e0f',
+											padding: '3px 12px', borderRadius: 100,
+										} }>
+											#{ rank } in your industry
+										</span>
+									</div>
+									<div style={ { display: 'flex', flexDirection: 'column', gap: 10 } }>
+										{ shares.map( ( entry, i ) => {
+											const isYou = entry === yourEntry;
+											return (
+												<div key={ i } style={ { display: 'flex', alignItems: 'center', gap: 8 } }>
+													<span style={ { fontSize: 11, width: 18, color: 'var(--fg-muted)', textAlign: 'right', fontWeight: 600 } }>#{ i + 1 }</span>
+													<span style={ { fontSize: 13, width: 120, fontWeight: isYou ? 700 : 400, color: isYou ? 'var(--fg)' : 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }>
+														{ isYou ? 'Your Site' : entry.name }
+													</span>
+													<div style={ { flex: 1, background: '#f1f5f9', borderRadius: 4, height: 7, overflow: 'hidden' } }>
+														<div style={ { width: `${ entry.percentage }%`, height: '100%', background: isYou ? 'var(--blue)' : '#cbd5e1', borderRadius: 4, transition: 'width 1s ease' } }/>
+													</div>
+													<span style={ { fontSize: 12.5, fontWeight: 700, width: 32, textAlign: 'right', color: isYou ? 'var(--blue)' : 'var(--fg-muted)' } }>{ entry.percentage }%</span>
+												</div>
+											);
+										} ) }
+									</div>
+									<p style={ { fontSize: 11, color: 'var(--fg-muted)', marginTop: 14, lineHeight: 1.5, borderTop: '1px solid var(--border-lt)', paddingTop: 10 } }>
+										Based on AI queries for your recent posts.
+									</p>
+								</div>
+							);
+						} )() : (
+							<div className="gleo-no-data-v2">
+								<Zap size={ 28 }/>
+								<p>No data yet. Click Refresh to run your first AI visibility analysis.</p>
+							</div>
+						) }
+					</div>
+				</div>
+
+				<div className="gleo-card">
+					<div className="gleo-card-header">
+						<h3>Live AI Crawler Activity</h3>
+						<span className="gleo-card-meta">Real-time</span>
+					</div>
+					<div className="gleo-card-body">
+						<p style={ { fontSize: 12.5, color: 'var(--fg-muted)', marginBottom: 14, marginTop: -4 } }>
+							See when AI bots like ChatGPT and Perplexity visit your site.
+						</p>
+						<div className="gleo-bot-feed">
+							{ botFeed.length > 0 ? botFeed.map( ( hit, i ) => (
+								<div key={ hit.id || i } className="gleo-bot-hit-item">
+									<div className="gleo-bot-icon-wrap"><ShieldCheck size={ 14 }/></div>
+									<div className="gleo-bot-details">
+										<div className="gleo-bot-row">
+											<strong>{ hit.bot_name }</strong>
+											<span className="gleo-bot-time">{ formatDistanceToNow( new Date( hit.timestamp ) ) } ago</span>
+										</div>
+										<div className="gleo-bot-path">Crawled: <code>{ hit.request_path }</code></div>
+									</div>
+								</div>
+							) ) : (
+								<div className="gleo-no-data-v2">
+									<Activity size={ 28 }/>
+									<p>No bot visits recorded yet. { gleoSupabase ? 'Updates live when crawlers hit your site.' : 'Add GLEO_SUPABASE_URL and GLEO_SUPABASE_ANON_KEY in wp-config for live updates.' }</p>
+								</div>
+							) }
+						</div>
+					</div>
+				</div>
+			</div>
+
+			{ scanChartRows.length > 0 && (
+				<div className="gleo-card gleo-analytics-history-card">
+					<div className="gleo-card-header">
+						<h3>GEO score &amp; AI visibility by post</h3>
+						<span className="gleo-card-meta">From recent scans</span>
+					</div>
+					<div className="gleo-card-body">
+						{ scanChartRows.map( row => (
+							<div key={ row.post_id } className="gleo-analytics-post-chart">
+								<p className="gleo-analytics-post-chart-title">{ row.result?.title || `Post #${ row.post_id }` }</p>
+								<PostHistoryChart postId={ row.post_id } showHeading={ false } />
+							</div>
+						) ) }
+					</div>
+				</div>
+			) }
+		</div>
+	);
+};
+
+// ── Signal chip ──────────────────────────────────────────────────────────────
+const Signal = ({ label, value, good, fixed }) => (
+    <div className={`gleo-signal ${good === true || fixed ? 'good' : good === false ? 'bad' : ''}`}>
+        <span className="gleo-signal-label">{label}</span>
+        <span className="gleo-signal-value">{value}{fixed ? ' ✓' : ''}</span>
+    </div>
+);
+
+// ── Priority section ─────────────────────────────────────────────────────────
+const PrioritySection = ({ priority, items, onFix }) => {
+    const [open, setOpen] = useState(priority === 'critical' || priority === 'high' || priority === 'medium');
+    if (!items || items.length === 0) return null;
+    const labels   = { critical: 'Critical Issues', high: 'High Priority', medium: 'Improvements', positive: 'Positive Signals' };
+    const dotClass = { critical: 'dot-critical', high: 'dot-high', medium: 'dot-medium', positive: 'dot-positive' };
+    return (
+        <div className="gleo-priority-section">
+            <div className="gleo-priority-header" onClick={() => setOpen(!open)}>
+                <span className={`gleo-priority-dot ${dotClass[priority]}`}></span>
+                <span className="gleo-priority-title">{labels[priority] || priority}</span>
+                <span className="gleo-priority-count">{items.length}</span>
+                <IconChevron open={open}/>
+            </div>
+            {open && (
+                <div className="gleo-priority-items">
+                    {items.map((item, i) => (
+                        <div key={i} className="gleo-rec-card">
+                            <div className="gleo-rec-card-body">
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                                    <strong>{item.area}</strong>
+                                    {item.maxScore !== undefined && (
+                                        <span className="gleo-rec-score-tag"
+                                            style={{ color: item.score === item.maxScore ? 'var(--green)' : item.score > 0 ? 'var(--amber)' : 'var(--red)' }}>
+                                            {item.score}/{item.maxScore}
+                                        </span>
+                                    )}
+                                </div>
+                                <p>{item.message}</p>
+                            </div>
+                            <div style={{ flexShrink: 0, paddingTop: 2 }}>
+                                {item.fixType ? (
+                                    <button className="gleo-btn gleo-btn-primary"
+                                        style={{ fontSize: 12, padding: '5px 12px' }}
+                                        onClick={() => onFix(item.fixType, item)}
+                                        disabled={item.applied || item.applying}>
+                                        {item.applied ? 'Applied' : item.applying ? 'Fixing…' : 'Fix'}
+                                    </button>
+                                ) : (
+                                    <span className="gleo-manual-tag">Info</span>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Scan Complete Modal ──────────────────────────────────────────────────────
+const ScanCompleteModal = ( { onClose } ) => (
+    <div className="gleo-modal-backdrop" onClick={ onClose }>
+        <div className="gleo-modal gleo-scan-modal" onClick={ e => e.stopPropagation() }>
+            <h3 className="gleo-scan-modal-title">Analysis complete</h3>
+            <p className="gleo-scan-modal-lead">
+                Your posts were scored for AI search visibility. Open the dashboard to see each report, preview the live page, and apply fixes in a few clicks.
+            </p>
+            <button type="button" className="gleo-btn gleo-btn-primary gleo-scan-modal-cta" onClick={ onClose }>
+                View report and fix your site
+            </button>
+        </div>
+    </div>
+);
+
+// ── Site Preview ─────────────────────────────────────────────────────────────
+const gleoPreviewContentRoot = ( doc ) => (
+    doc.querySelector( '.entry-content, .wp-block-post-content, article .entry-content' ) ||
+    doc.querySelector( 'main article, article.post, .wp-site-blocks' ) ||
+    doc.body
+);
+
+const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) => {
+    const [ iframeKey, setIframeKey ] = useState( Date.now() );
+    const [ iframeLoaded, setIframeLoaded ] = useState( false );
+    const iframeRef = useRef( null );
+    const [ tourState, setTourState ] = useState( { active: false, step: 0, elements: [] } );
+    const [ showTourPrompt, setShowTourPrompt ] = useState( false );
+
+    const iframeSrc = ( () => {
+        let baseUrl = url || '';
+        if ( baseUrl && ! baseUrl.includes( 'gleo_iframe=' ) ) {
+            baseUrl += ( baseUrl.includes( '?' ) ? '&' : '?' ) + 'gleo_iframe=1';
+        }
+        const sep = baseUrl.includes( '?' ) ? '&' : '?';
+        return `${ baseUrl }${ sep }gleo_cb=${ iframeKey }`;
+    } )();
+
+    useEffect( () => {
+        if ( ! applyingAll && allApplied ) {
+            setIframeKey( Date.now() );
+            setIframeLoaded( false );
+        }
+    }, [ applyingAll, allApplied ] );
+
+    // Auto-scroll to first Gleo block when iframe loads after fixes applied
+    useEffect( () => {
+        if ( ! iframeLoaded || ! allApplied ) {
+            return;
+        }
+        const timer = setTimeout( () => {
+            const doc = iframeRef.current?.contentDocument;
+            if ( ! doc ) {
+                return;
+            }
+            const root = gleoPreviewContentRoot( doc );
+            const first = root.querySelector( '.gleo-table-block, .gleo-qa-block, .gleo-faq-wrap, h2.wp-block-heading.gleo-section-heading, h2.wp-block-heading' );
+            if ( first ) {
+                first.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+            }
+            setShowTourPrompt( true );
+        }, 600 );
+        return () => clearTimeout( timer );
+    }, [ iframeLoaded, allApplied ] );
+
+    const startTour = () => {
+        setShowTourPrompt( false );
+        const doc = iframeRef.current?.contentDocument;
+        if ( ! doc ) {
+            return;
+        }
+        const root = gleoPreviewContentRoot( doc );
+        const possibleSteps = [
+            {
+                title: 'Figures & Evidence',
+                blurb: 'This block surfaces numbers and claims so AI answers and readers can cite your page as a credible source.',
+                find: () => root.querySelector( '.gleo-stats-callout' ),
+            },
+            {
+                title: 'Comparison Layout',
+                blurb: 'Side‑by‑side rows give models a scannable summary of options, which often gets quoted in AI overviews.',
+                find: () => root.querySelector( '.gleo-table-block' ),
+            },
+            {
+                title: 'Direct Answers',
+                blurb: 'A tight question‑and‑answer pair helps assistants pull an accurate definition or summary from your content.',
+                find: () => root.querySelector( '.gleo-qa-block' ),
+            },
+            {
+                title: 'Common Questions',
+                blurb: 'These expandable answers target long‑tail queries and give crawlers clear, structured text to index.',
+                find: () => root.querySelector( '.gleo-faq-wrap' ),
+            },
+            {
+                title: 'Section Structure',
+                blurb: 'Extra headings break the article into chunks that are easier for both people and models to navigate.',
+                find: () => root.querySelector( 'h2.wp-block-heading.gleo-section-heading' ) || root.querySelector( 'h2.wp-block-heading' ),
+            },
+            {
+                title: 'Structured Data',
+                blurb: 'JSON‑LD in the page head tells search and AI systems what this content is about without changing what visitors see.',
+                isHead: true,
+                find: () => doc.head?.querySelector( 'script[type="application/ld+json"]' ),
+            },
+        ];
+        const found = [];
+        for ( const step of possibleSteps ) {
+            const el = typeof step.find === 'function' ? step.find() : null;
+            if ( el ) {
+                const entry = { el, title: step.title, text: step.blurb || '', isHead: !! step.isHead };
+                if ( step.isHead && el.textContent ) {
+                    try {
+                        entry.schemaPayload = JSON.parse( el.textContent );
+                    } catch ( e ) {}
+                }
+                found.push( entry );
+            }
+        }
+        if ( ! found.length ) {
+            alert( 'No AI blocks found yet. Ensure fixes are applied first.' );
+            return;
+        }
+        if ( ! doc.getElementById( 'gleo-tour-styles' ) ) {
+            const s = doc.createElement( 'style' );
+            s.id = 'gleo-tour-styles';
+            s.textContent = '.gleo-dimmed{transition:opacity .4s;opacity:.2;filter:grayscale(60%);pointer-events:none}.gleo-highlight{opacity:1!important;filter:none!important;position:relative;z-index:999999;box-shadow:0 0 0 20000px rgba(15,23,42,.75),0 10px 40px rgba(59,130,246,.5);border-radius:12px;pointer-events:auto;background:transparent}';
+            doc.head.appendChild( s );
+        }
+        setTourState( { active: true, step: 0, elements: found } );
+    };
+
+    useEffect( () => {
+        if ( ! tourState.active ) {
+            return;
+        }
+        const doc = iframeRef.current?.contentDocument;
+        if ( ! doc ) {
+            return;
+        }
+        doc.querySelectorAll( '.gleo-dimmed' ).forEach( e => e.classList.remove( 'gleo-dimmed' ) );
+        doc.querySelectorAll( '.gleo-highlight' ).forEach( e => e.classList.remove( 'gleo-highlight' ) );
+        const cur = tourState.elements[ tourState.step ];
+        if ( ! cur ) {
+            return;
+        }
+        if ( ! cur.isHead ) {
+            Array.from( doc.body.children ).forEach( c => {
+                if ( c.tagName !== 'SCRIPT' && c.tagName !== 'STYLE' ) {
+                    c.classList.add( 'gleo-dimmed' );
+                }
+            } );
+            let t = cur.el;
+            while ( t && t !== doc.body ) {
+                t.classList.remove( 'gleo-dimmed' );
+                t = t.parentElement;
+            }
+            cur.el.classList.add( 'gleo-highlight' );
+            requestAnimationFrame( () => {
+                cur.el.scrollIntoView( { behavior: 'smooth', block: 'center', inline: 'nearest' } );
+            } );
+        } else {
+            Array.from( doc.body.children ).forEach( c => c.classList.add( 'gleo-dimmed' ) );
+            iframeRef.current.contentWindow.scrollTo( { top: 0, behavior: 'smooth' } );
+        }
+    }, [ tourState ] );
+
+    const stopTour = () => {
+        const doc = iframeRef.current?.contentDocument;
+        if ( doc ) {
+            doc.querySelectorAll( '.gleo-dimmed' ).forEach( e => e.classList.remove( 'gleo-dimmed' ) );
+            doc.querySelectorAll( '.gleo-highlight' ).forEach( e => e.classList.remove( 'gleo-highlight' ) );
+        }
+        setTourState( { active: false, step: 0, elements: [] } );
+    };
+
+    return (
+        <div className="gleo-preview-overlay" style={ { background: '#0f172a', display: 'flex', flexDirection: 'column' } }>
+            <div className="gleo-preview-toolbar gleo-preview-header" style={ { padding: '16px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.12)' } }>
+                <div style={ { display: 'flex', alignItems: 'center', gap: 24 } }>
+                    <div style={ { fontSize: 18, fontWeight: 800, color: '#fff', letterSpacing: '-0.02em' } }>Live Preview</div>
+                    { ! allApplied ? (
+                        <button className="gleo-btn gleo-btn-primary" style={ { fontSize: 14, padding: '9px 24px', borderRadius: 10 } }
+                            onClick={ onApplyAll } disabled={ applyingAll }>
+                            { applyingAll ? 'Applying auto-fixes…' : 'Apply all auto-fixes' }
+                        </button>
+                    ) : (
+                        <div style={ { display: 'flex', alignItems: 'center', gap: 8 } }>
+                            <span style={ { fontSize: 16 } }>✅</span>
+                            <span style={ { color: '#4ade80', fontWeight: 700, fontSize: 14 } }>All auto-fixes active</span>
+                            <button type="button" className="gleo-btn gleo-preview-chrome-btn" onClick={ startTour } style={ { marginLeft: 12, padding: '6px 14px', fontSize: 12, borderRadius: 8 } }>Restart AI Tour</button>
+                        </div>
+                    ) }
+                </div>
+                <button type="button" className="gleo-btn gleo-preview-chrome-btn gleo-preview-exit-btn"
+                    style={ { fontSize: 13, padding: '10px 22px', borderRadius: 8, fontWeight: 700 } }
+                    onClick={ () => { stopTour(); onClose(); } }>Exit preview</button>
+            </div>
+
+            <div className="gleo-preview-body" style={ { display: 'flex', flexDirection: 'column', flex: 1, padding: 0, margin: 0, overflow: 'hidden', position: 'relative', background: '#f1f5f9' } }>
+                { ( applyingAll || ( ! iframeLoaded && allApplied ) ) && (
+                    <div className="gleo-preview-loading" style={ { position: 'absolute', inset: 0, zIndex: 10, background: 'rgba(15,23,42,0.7)', backdropFilter: 'blur(10px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' } }>
+                        <div className="gleo-spinner" style={ { marginBottom: 20, width: 40, height: 40, borderTopColor: '#3b82f6' } }></div>
+                        <p style={ { color: '#fff', fontSize: 16, fontWeight: 600 } }>{ applyingAll ? 'Syncing AI optimizations…' : 'Finalizing preview…' }</p>
+                    </div>
+                ) }
+                <iframe ref={ iframeRef } key={ iframeKey } src={ iframeSrc }
+                    onLoad={ () => setIframeLoaded( true ) }
+                    loading="eager"
+                    style={ { width: '100%', height: '100%', border: 'none', background: '#fff', transition: 'opacity 0.5s ease' } }
+                    title="Site Preview"/>
+
+                { showTourPrompt && ! tourState.active && (
+                    <div style={ { position: 'absolute', top: 30, right: 30, background: '#ffffff', padding: '24px', borderRadius: 20, width: 340, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)', zIndex: 100, border: '1px solid #e2e8f0' } }>
+                        <button type="button" onClick={ () => setShowTourPrompt( false ) } style={ { position: 'absolute', top: 12, right: 16, background: 'transparent', border: 'none', color: '#94a3b8', fontSize: 20, cursor: 'pointer' } }>×</button>
+                        <div style={ { width: 44, height: 44, background: 'var(--gleo-accent-bg)', color: 'var(--gleo-accent)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, marginBottom: 16 } }>✨</div>
+                        <h4 style={ { margin: '0 0 8px', fontSize: 18, color: '#0f172a', fontWeight: 800 } }>AI Changes Applied</h4>
+                        <p style={ { color: '#64748b', fontSize: 14, margin: '0 0 20px', lineHeight: 1.5 } }>Walk through where new GEO blocks were added.</p>
+                        <button className="gleo-btn gleo-btn-primary" type="button" onClick={ startTour } style={ { width: '100%', padding: '12px', fontSize: 14, fontWeight: 700, borderRadius: 12 } }>
+                            Start Guided AI Tour
+                        </button>
+                    </div>
+                ) }
+
+                { tourState.active && tourState.elements[ tourState.step ] && (
+                    <div style={ {
+                        position: 'absolute',
+                        top: 10,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        background: '#1e293b',
+                        padding: '20px 24px',
+                        borderRadius: 20,
+                        width: 'min(92vw, 480px)',
+                        maxHeight: 'min(42vh, 360px)',
+                        overflowY: 'auto',
+                        boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        zIndex: 1000000,
+                    } }>
+                        <div style={ { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 } }>
+                            <div style={ { display: 'flex', alignItems: 'center', gap: 10 } }>
+                                <div style={ { width: 10, height: 10, borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981' } }></div>
+                                <span className="gleo-tour-step-pill" style={ { color: '#94a3b8', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.02em' } }>
+                                    Issue { tourState.step + 1 } of { tourState.elements.length }
+                                </span>
+                            </div>
+                            <button type="button" onClick={ stopTour } style={ { background: 'transparent', border: 'none', color: '#64748b', fontSize: 24, cursor: 'pointer', padding: 0 } }>&times;</button>
+                        </div>
+                        <h3 className="gleo-tour-step-title" style={ { color: '#fff', margin: '0 0 10px', fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' } }>{ tourState.elements[ tourState.step ].title }</h3>
+                        { tourState.elements[ tourState.step ].text ? (
+                            <p className="gleo-tour-step-blurb" style={ { color: '#94a3b8', margin: '0 0 16px', fontSize: 14, lineHeight: 1.55, fontWeight: 500 } }>
+                                { tourState.elements[ tourState.step ].text }
+                            </p>
+                        ) : null }
+                        { tourState.elements[ tourState.step ].schemaPayload && (
+                            <div style={ { marginBottom: 16 } }>
+                                <div style={ { fontSize: 11, color: '#94a3b8', fontWeight: 700, marginBottom: 8, textTransform: 'uppercase' } }>Injected JSON-LD</div>
+                                <pre style={ { background: '#0f172a', color: '#10b981', padding: '12px', borderRadius: 12, fontSize: 11, overflowX: 'auto', maxHeight: 140, border: '1px solid rgba(255,255,255,0.1)', margin: 0, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' } }>
+                                    <code>{ JSON.stringify( tourState.elements[ tourState.step ].schemaPayload, null, 2 ) }</code>
+                                </pre>
+                            </div>
+                        ) }
+                        <div style={ { display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8 } }>
+                            <button type="button" className="gleo-btn" disabled={ tourState.step === 0 } onClick={ () => setTourState( p => ( { ...p, step: p.step - 1 } ) ) } style={ { background: 'rgba(255,255,255,0.05)', color: '#fff', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 20px', borderRadius: 12, opacity: tourState.step === 0 ? 0.3 : 1 } }>
+                                Previous
+                            </button>
+                            <div style={ { display: 'flex', gap: 6 } }>
+                                { tourState.elements.map( ( _, i ) => (
+                                    <div key={ i } style={ { width: 6, height: 6, borderRadius: '50%', background: i === tourState.step ? '#10b981' : 'rgba(255,255,255,0.1)' } } />
+                                ) ) }
+                            </div>
+                            { tourState.step < tourState.elements.length - 1 ? (
+                                <button type="button" className="gleo-btn gleo-btn-primary" onClick={ () => setTourState( p => ( { ...p, step: p.step + 1 } ) ) } style={ { padding: '10px 24px', borderRadius: 12 } }>
+                                    Next →
+                                </button>
+                            ) : (
+                                <button type="button" className="gleo-btn gleo-btn-primary" onClick={ stopTour } style={ { padding: '10px 24px', borderRadius: 12, background: '#3b82f6', border: 'none' } }>
+                                    Done
+                                </button>
+                            ) }
+                        </div>
+                    </div>
+                ) }
+            </div>
+        </div>
+    );
+};
+
+// ── Report Card ──────────────────────────────────────────────────────────────
+const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
+    const { post_id, result, preview_url: previewUrl } = report;
+    const canCollapse = totalReportCards >= 3;
+    const [expanded, setExpanded]             = useState( () => totalReportCards < 3 );
+    const [appliedTypes, setAppliedTypes]     = useState({});
+    const [applyingTypes, setApplyingTypes]   = useState({});
+    const [toasts, setToasts]                 = useState([]);
+    const [modal, setModal]                   = useState(null);
+    const [showPreview, setShowPreview]       = useState(false);
+    const [isApplyingAll, setIsApplyingAll]   = useState(false);
+    const [showSchema, setShowSchema]         = useState(false);
+
+    const siteUrl = typeof gleoData !== 'undefined' ? gleoData.siteUrl : '';
+    const base = siteUrl ? siteUrl.replace( /\/$/, '' ) : '';
+    const postUrl = previewUrl || ( base ? `${ base }/?p=${ post_id }&gleo_iframe=1` : '' );
+
+    if (!result) return null;
+
+    const addToast    = msg => { const id = Date.now(); setToasts(p => [...p, { id, message: msg }]); };
+    const removeToast = id  => setToasts(p => p.filter(t => t.id !== id));
+
+    const buildItems = () => {
+        const items = [];
+        const cs = result.content_signals || {};
+
+        // ── 1. Technical Crawlability (15 pts) ──
+        {
+            let score = 0;
+            if (!cs.has_meta_robots_block) score += 5;
+            if (cs.alt_text_coverage >= 90 || cs.image_count === 0) score += 5;
+            if (cs.has_llms_txt) score += 5;
+            const issues = [];
+            if (cs.has_meta_robots_block) issues.push('Remove noindex/nofollow meta tag');
+            if (cs.image_count > 0 && cs.alt_text_coverage < 90) issues.push(`${cs.alt_text_coverage}% alt text coverage (aim for 90%+)`);
+            if (!cs.has_llms_txt) issues.push('Re-scan to verify /llms.txt in HTML (Gleo serves it and adds a head link)');
+            const msg = score === 15 ? 'All technical crawlability checks pass. AI bots can fully access your content.' : issues.join('. ') + '.';
+            items.push({ priority: score === 15 ? 'positive' : score <= 5 ? 'critical' : 'medium', area: 'Technical Crawlability', maxScore: 15, score, message: msg, fixType: null, emoji: '🔍' });
+        }
+
+        // ── 2. Structured Data & Schema (20 pts) ──
+        {
+            let score = 0;
+            if (cs.has_schema) score += 10;
+            if (cs.has_faq_schema) score += 5;
+            if (cs.has_org_schema) score += 5;
+            const issues = [];
+            if (!cs.has_schema) issues.push('Deploy JSON-LD schema markup');
+            if (!cs.has_faq_schema) issues.push('Add FAQPage schema');
+            if (!cs.has_org_schema) issues.push('Add Organization/Product schema');
+            const msg = score === 20 ? 'Full schema coverage. AI engines can fully understand your content structure.' : issues.join('. ') + '.';
+            items.push({ priority: score === 20 ? 'positive' : !cs.has_schema ? 'critical' : 'medium', area: 'Structured Data & Schema', maxScore: 20, score, message: msg, fixType: score < 20 ? 'schema' : null, emoji: '🏗️' });
+        }
+
+        // ── 3. Content Quality (30 pts) ──
+        {
+            let score = 0;
+            if (cs.word_count >= 2000) score += 10;
+            else if (cs.word_count >= 1200) score += 7;
+            else if (cs.word_count >= 600) score += 4;
+            else if (cs.word_count > 0) score += 1;
+            if (cs.has_direct_answer) score += 5;
+            if (cs.has_tldr) score += 5;
+            if (cs.has_conversational_queries) score += 3;
+            if (cs.has_direct_answers) score += 2;
+            if (cs.word_count >= 800 && cs.has_statistics) score += 3;
+            if (cs.has_quotes) score += 2;
+            score = Math.min(30, score);
+            const issues = [];
+            if (cs.word_count < 1200) issues.push(`${cs.word_count} words — aim for 1,200+`);
+            if (!cs.has_direct_answer) issues.push('Add a 60-100 word direct answer at the top');
+            if (!cs.has_tldr) issues.push('Add TL;DR or Key Takeaways');
+            if (!cs.has_conversational_queries) issues.push('Target conversational queries');
+            const msg = score >= 25 ? 'Strong content quality. Depth, direct answers, and conversational targeting are solid.' : issues.join('. ') + '.';
+            // Multi-fix: content_depth (expand) + faq (includes direct answers)
+            items.push({ priority: score >= 25 ? 'positive' : score <= 10 ? 'critical' : score <= 20 ? 'high' : 'medium', area: 'Content Quality', maxScore: 30, score, message: msg, fixType: score < 25 ? 'content_depth' : null, extraFixes: score < 25 ? ['faq'] : [], emoji: '✍️' });
+        }
+
+        // ── 4. Credibility (15 pts) ──
+        {
+            let score = 0;
+            if (cs.stat_count >= 3) score += 5;
+            else if (cs.stat_count >= 1) score += 3;
+            if (cs.citation_count >= 3) score += 5;
+            else if (cs.citation_count >= 1) score += 3;
+            if (cs.has_quotes) score += 5;
+            const issues = [];
+            if (cs.stat_count < 3) issues.push('Add first-party statistics and data');
+            if (cs.citation_count < 3) issues.push('Link to authoritative external sources');
+            if (!cs.has_quotes) issues.push('Include expert quotes or testimonials');
+            const msg = score === 15 ? 'Excellent credibility signals. Statistics, citations, and expert quotes are present.' : issues.join('. ') + '.';
+            items.push({ priority: score === 15 ? 'positive' : score <= 5 ? 'high' : 'medium', area: 'Credibility', maxScore: 15, score, message: msg, fixType: score < 15 ? 'authority' : null, emoji: '📊' });
+        }
+
+        // ── 5. AI-Specific Formatting (20 pts) ──
+        {
+            let score = 0;
+            if (cs.heading_count >= 4) score += 5;
+            else if (cs.heading_count >= 2) score += 3;
+            else if (cs.has_headings) score += 1;
+            if (cs.long_paragraphs === 0 && cs.paragraph_count > 0) score += 5;
+            else if (cs.long_paragraphs <= 2) score += 3;
+            if (cs.list_item_count >= 3) score += 4;
+            else if (cs.has_lists) score += 2;
+            if (cs.has_faq) score += 3;
+            if (cs.has_table) score += 3;
+            const issues = [];
+            if (cs.heading_count < 4) issues.push(`${cs.heading_count} headings — add H2s every ~3 paragraphs`);
+            if (cs.long_paragraphs > 0) issues.push(`${cs.long_paragraphs} long paragraph(s) to shorten`);
+            if (!cs.has_lists) issues.push('Convert dense text to bulleted lists');
+            if (!cs.has_faq) issues.push('Add a contextual FAQ block');
+            if (!cs.has_table) issues.push('Add comparison tables');
+            const msg = score === 20 ? 'Excellent AI-specific formatting. Content is fully optimized for AI extraction.' : issues.join('. ') + '.';
+            // Multi-fix: structure + formatting + readability + faq + data_tables
+            items.push({ priority: score === 20 ? 'positive' : score <= 8 ? 'high' : 'medium', area: 'AI-Specific Formatting', maxScore: 20, score, message: msg, fixType: score < 20 ? 'structure' : null, extraFixes: score < 20 ? ['formatting', 'readability', 'faq', 'data_tables'] : [], emoji: '🤖' });
+        }
+
+        return items.map(item => ({
+            ...item,
+            applied:  item.fixType ? !!appliedTypes[item.fixType]  : false,
+            applying: item.fixType ? !!applyingTypes[item.fixType] : false,
+        }));
+    };
+
+    const allItems = buildItems();
+
+    const doApply = (fixType, userInput) => {
+        const config = FIX_CONFIG[fixType];
+        setApplyingTypes(p => ({ ...p, [fixType]: true }));
+        const data = { post_id, type: fixType, enabled: true };
+        if (userInput !== undefined) data.user_input = userInput;
+        apiFetch({ path: '/gleo/v1/apply', method: 'POST', data })
+            .then(() => { setAppliedTypes(p => ({ ...p, [fixType]: true })); addToast(config?.successMsg || `${fixType} applied.`); })
+            .catch(err => addToast(`Failed: ${err.message || 'Unknown error'}`))
+            .finally(() => setApplyingTypes(p => ({ ...p, [fixType]: false })));
+    };
+
+    const handleFix = fixType => {
+        const config = FIX_CONFIG[fixType];
+        if (!config) return;
+        if (config.needsInput) setModal({ fixType, title: config.label, prompt: config.prompt, inputType: config.inputType });
+        else doApply(fixType);
+    };
+
+    const handleApplyAll = async () => {
+        setIsApplyingAll(true);
+        const names = [];
+        let failed = false;
+        // Collect all unique fix types from items (primary + extra)
+        const allFixTypes = new Set();
+        for (const item of allItems) {
+            if (item.fixType && !item.applied && !FIX_CONFIG[item.fixType]?.needsInput) allFixTypes.add(item.fixType);
+            if (item.extraFixes) item.extraFixes.forEach(ft => { if (FIX_CONFIG[ft] && !FIX_CONFIG[ft].needsInput) allFixTypes.add(ft); });
+        }
+        for (const ft of allFixTypes) {
+            if (appliedTypes[ft]) continue;
+            names.push(FIX_CONFIG[ft]?.label || ft);
+            setApplyingTypes(p => ({ ...p, [ft]: true }));
+            try {
+                await apiFetch({ path: '/gleo/v1/apply', method: 'POST', data: { post_id, type: ft, enabled: true } });
+                await new Promise(r => setTimeout(r, 80));
+                setAppliedTypes(p => ({ ...p, [ft]: true }));
+            } catch(err) {
+                failed = true;
+            } finally {
+                setApplyingTypes(p => ({ ...p, [ft]: false }));
+            }
+        }
+        
+        if (names.length > 0) {
+            addToast(failed ? 'Some fixes failed.' : `Applied: ${names.join(', ')}`);
+        }
+        setIsApplyingAll(false);
+    };
+
+    const allAutoFixed = allItems.filter(i => i.fixType && !FIX_CONFIG[i.fixType]?.needsInput).every(i => i.applied);
+    // Honest headline score: use analyzer GEO score from the last stored scan (never inflate from local "applied" clicks).
+    const pillarSumRaw = allItems.reduce((acc, item) => acc + (item.score || 0), 0);
+    const storedGeo     = typeof result.geo_score === 'number' && ! Number.isNaN(result.geo_score )
+        ? Math.max(0, Math.min(100, Math.round(result.geo_score)))
+        : null;
+    const headlineScore = storedGeo !== null ? storedGeo : Math.min(100, pillarSumRaw);
+    const issueCount   = allItems.filter(i => i.priority === 'critical' || i.priority === 'high').length;
+    const showReportBody = expanded || ! canCollapse;
+
+    return (
+        <div className="gleo-report-card">
+            {toasts.length > 0 && (
+                <div className="gleo-toast-container">
+                    {toasts.map(t => <SuccessToast key={t.id} message={t.message} onDismiss={() => removeToast(t.id)}/>)}
+                </div>
+            )}
+
+            <div
+                className={ `gleo-report-header${ canCollapse ? '' : ' gleo-report-header-static' }` }
+                onClick={ canCollapse ? () => setExpanded( e => ! e ) : undefined }
+                role={ canCollapse ? 'button' : undefined }
+                tabIndex={ canCollapse ? 0 : undefined }
+                onKeyDown={ canCollapse ? ev => {
+                    if ( ev.key === 'Enter' || ev.key === ' ' ) {
+                        ev.preventDefault();
+                        setExpanded( e => ! e );
+                    }
+                } : undefined }
+            >
+                <span className={`gleo-score-chip ${scoreChipClass(headlineScore)}`}>{headlineScore}</span>
+                <div className="gleo-report-title">
+                    <h3>{result.title || `Post #${post_id}`}</h3>
+                    {result.content_signals?.word_count !== undefined && (
+                        <p className="gleo-post-meta">
+                            {result.content_signals.word_count} words &middot; {issueCount} issue{issueCount !== 1 ? 's' : ''}
+                            {typeof result.geo_score === 'number' && !Number.isNaN(result.geo_score) ? (
+                                <span style={{ display: 'block', fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+                                    GEO score from last scan. Re-run analysis to refresh after you change the live post.
+                                </span>
+                            ) : null}
+                        </p>
+                    )}
+                </div>
+                { canCollapse ? <IconChevron open={expanded}/> : <span className="gleo-report-chevron-spacer" aria-hidden="true"/> }
+            </div>
+
+            <div className="gleo-report-workflow">
+                <p className="gleo-workflow-label">Recommended: preview your page, then apply fixes.</p>
+                <div className="gleo-workflow-actions">
+                    { postUrl ? (
+                        <button type="button" className="gleo-btn gleo-btn-outline gleo-workflow-btn-preview"
+                            onClick={ () => setShowPreview( v => ! v ) }>
+                            { showPreview ? 'Close preview' : 'Preview site' }
+                        </button>
+                    ) : null }
+                    <button type="button" className="gleo-btn gleo-btn-primary gleo-workflow-btn-apply"
+                        onClick={ handleApplyAll } disabled={ allAutoFixed || isApplyingAll }>
+                        { isApplyingAll ? 'Applying…' : ( allAutoFixed ? 'All auto-fixes applied' : 'Apply all auto-fixes' ) }
+                    </button>
+                </div>
+                <p className="gleo-workflow-hint">Category fixes that need your input stay one click each below.</p>
+            </div>
+
+            { showReportBody && (
+                <div className="gleo-report-body">
+                    {(result.json_ld_schema || result.content_signals?.has_schema) && (
+                        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '14px 16px', marginBottom: 16 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <strong style={{ color: '#0f172a', fontSize: 13.5 }}>JSON-LD (Gleo) — {result.content_signals?.has_schema ? 'detected on last scan' : 'stored payload; re-scan to confirm live HTML'}</strong>
+                                <button type="button" className="gleo-btn gleo-btn-outline" style={{ fontSize: 12, padding: '4px 10px' }}
+                                    onClick={() => setShowSchema(!showSchema)}>
+                                    {showSchema ? 'Hide' : 'View payload'}
+                                </button>
+                            </div>
+                            {showSchema && (
+                                <pre style={{ background: '#1e293b', color: '#34d399', padding: '12px', borderRadius: 6, fontSize: 12, overflowX: 'auto', margin: '14px 0 0' }}>
+                                    <code>{JSON.stringify(result.json_ld_schema, null, 2)}</code>
+                                </pre>
+                            )}
+                        </div>
+                    )}
+
+                    {result.content_signals && (
+                        <div className="gleo-section">
+                            <h4>Content Signals</h4>
+                            <div className="gleo-signals-grid">
+                                <Signal label="Word Count"      value={result.content_signals.word_count}/>
+                                <Signal label="Alt Text"        value={`${result.content_signals.alt_text_coverage || 0}%`}  good={result.content_signals.alt_text_coverage >= 90}/>
+                                <Signal label="Schema"          value={result.content_signals.has_schema ? 'Yes' : 'No'}  good={result.content_signals.has_schema}/>
+                                <Signal label="Direct Answer"   value={result.content_signals.has_direct_answer ? 'Yes' : 'No'}  good={result.content_signals.has_direct_answer}/>
+                                <Signal label="Headings"        value={result.content_signals.heading_count}   good={result.content_signals.heading_count >= 4}/>
+                                <Signal label="Long Paras"      value={result.content_signals.long_paragraphs || 0}  good={result.content_signals.long_paragraphs === 0}/>
+                                <Signal label="Lists"           value={result.content_signals.list_item_count}  good={result.content_signals.has_lists}/>
+                                <Signal label="FAQ"             value={result.content_signals.has_faq ? 'Yes' : 'No'}  good={result.content_signals.has_faq}/>
+                                <Signal label="Statistics"      value={result.content_signals.stat_count || 0}  good={result.content_signals.stat_count >= 3}/>
+                                <Signal label="Citations"       value={result.content_signals.citation_count || 0}  good={result.content_signals.citation_count >= 3}/>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="gleo-section">
+                        <div className="gleo-issues-header" style={{ marginBottom: 12 }}>
+                            <h4 style={{ margin: 0 }}>Category Breakdown</h4>
+                        </div>
+                        <div className="gleo-report-table" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', border: 'none', background: 'transparent' }}>
+                            {allItems.map((item, i) => {
+                                const maxVal   = item.maxScore ?? 10;
+                                const scoreVal = item.score != null ? item.score : null;
+                                const pct      = scoreVal != null ? Math.round((scoreVal / maxVal) * 100) : 0;
+                                const barColor = item.applied ? 'var(--green)'
+                                               : item.priority === 'critical' ? 'var(--red)'
+                                               : item.priority === 'high'     ? 'var(--amber)'
+                                               : 'var(--blue)';
+                                const scoreColor = item.applied ? 'var(--green)'
+                                                 : item.priority === 'critical' ? 'var(--red)'
+                                                 : item.priority === 'high'     ? 'var(--amber)'
+                                                 : 'var(--fg-muted)';
+                                return (
+                                    <div key={i} className={`gleo-report-row gleo-issue-${item.priority}`} style={{ borderRadius: 8, padding: 14, margin: 0, height: '100%' }}>
+                                        <div className="gleo-report-row-main">
+                                            <div className="gleo-report-row-top" style={{ paddingBottom: 8, marginBottom: 8, borderBottom: '1px solid #e2e8f0' }}>
+                                                <strong className="gleo-report-area-name" style={{ fontSize: 14 }}>{item.emoji ? `${item.emoji} ` : ''}{item.area}</strong>
+                                                <div className="gleo-report-score-wrap">
+                                                    <span className="gleo-report-score-num" style={{ color: item.applied ? 'var(--green)' : scoreColor, fontWeight: 700 }}>
+                                                        {item.applied ? maxVal : scoreVal ?? '—'}
+                                                        <span className="gleo-report-score-denom" style={{ fontWeight: 500, fontSize: 12 }}>/{maxVal}</span>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <p className="gleo-report-row-desc" style={{ fontSize: 12 }}>{item.message}</p>
+                                        </div>
+                                        <div className="gleo-issue-action" style={{ paddingTop: 10, display: 'flex', justifyContent: 'flex-start' }}>
+                                            {item.applied ? (
+                                                <span className="gleo-status-good">✓ Fixed</span>
+                                            ) : item.fixType ? (
+                                                <button className="gleo-btn gleo-btn-outline"
+                                                    style={{ fontSize: 11, padding: '4px 12px' }}
+                                                    onClick={() => handleFix(item.fixType)}
+                                                    disabled={item.applying}>
+                                                    {item.applying ? 'Fixing…' : 'Autofix Category'}
+                                                </button>
+                                            ) : (
+                                                <span className="gleo-status-good" style={{ color: item.priority === 'positive' ? 'var(--green)' : 'var(--fg-muted)' }}>
+                                                    {item.priority === 'positive' ? '✓ Perfect' : 'Manual'}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        {allItems.length === 0 && (
+                            <p style={{ fontSize: 13, color: 'var(--fg-muted)', padding: '16px 20px' }}>No report data yet.</p>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            { showPreview && postUrl && (
+                <SitePreview url={ postUrl } onClose={ () => setShowPreview( false ) }
+                    onApplyAll={ handleApplyAll } applyingAll={ isApplyingAll } allApplied={ allAutoFixed }/>
+            ) }
+
+            {modal && (
+                <InputModal title={modal.title} prompt={modal.prompt} inputType={modal.inputType}
+                    onSubmit={input => { doApply(modal.fixType, input); setModal(null); }}
+                    onCancel={() => setModal(null)}/>
+            )}
+        </div>
+    );
+};
+
+// ── Settings panel ────────────────────────────────────────────────────────────
+const SettingsPanel = ({ clientId, setClientId, secretKey, setSecretKey, onSave, isSaving, saveStatus, overrideSchema, setOverrideSchema }) => (
+    <div>
+        <div className="gleo-page-header">
+            <div>
+                <h1>Settings</h1>
+                <p className="gleo-page-subtitle">API credentials and plugin configuration</p>
+            </div>
+        </div>
+        {saveStatus && <div className={`gleo-notice ${saveStatus.type}`}>{saveStatus.message}</div>}
+        {seoPluginActive && (
+            <div className="gleo-seo-warning" style={{ marginBottom: 16 }}>
+                <strong>{seoPluginName} detected.</strong> You can override its schema with Gleo's AI-optimized version.
+                <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <input type="checkbox" id="gleo-override" checked={overrideSchema}
+                        onChange={e => {
+                            setOverrideSchema(e.target.checked);
+                            apiFetch({ path: '/wp/v2/settings', method: 'POST', data: { gleo_override_schema: e.target.checked } });
+                        }}
+                        style={{ accentColor: 'var(--blue)', width: 15, height: 15, cursor: 'pointer' }}/>
+                    <label htmlFor="gleo-override" style={{ fontSize: 13, color: 'var(--fg-mid)', cursor: 'pointer' }}>
+                        Global schema override
+                    </label>
+                </div>
+            </div>
+        )}
+        <div className="gleo-creds-panel">
+            <h3>API Credentials</h3>
+            <div className="gleo-field">
+                <label>Client ID</label>
+                <input className="gleo-input" type="text" value={clientId} onChange={e => setClientId(e.target.value)}/>
+            </div>
+            <div className="gleo-field">
+                <label>Secret Key</label>
+                <input className="gleo-input" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)}/>
+            </div>
+            <button className="gleo-btn gleo-btn-primary" onClick={onSave} disabled={isSaving}>
+                {isSaving ? 'Saving…' : 'Save settings'}
+            </button>
+        </div>
+    </div>
+);
+
+// ── Main App ─────────────────────────────────────────────────────────────────
+const App = () => {
+    const [activeTab, setActiveTab]             = useState('scan');
+    const [clientId, setClientId]               = useState('');
+    const [secretKey, setSecretKey]             = useState('');
+    const [isSaving, setIsSaving]               = useState(false);
+    const [saveStatus, setSaveStatus]           = useState(null);
+    const [isScanning, setIsScanning]           = useState(false);
+    const [scanProgress, setScanProgress]       = useState(0);
+    const [fakeProgress, setFakeProgress]       = useState(0);
+    const [scanResults, setScanResults]         = useState([]);
+    const [overrideSchema, setOverrideSchema]   = useState(false);
+    const [availablePosts, setAvailablePosts]   = useState([]);
+    const [selectedPosts, setSelectedPosts]     = useState([]);
+    const [isLoadingPosts, setIsLoadingPosts]   = useState(true);
+    const [showScanModal, setShowScanModal]     = useState(false);
+    const scanJustStarted                       = useRef(false);
+    const progressIntervalRef                   = useRef(null);
+
+    // Simulated progress
+    useEffect(() => {
+        if (isScanning) {
+            setFakeProgress(8);
+            progressIntervalRef.current = setInterval(() => {
+                setFakeProgress(p => p >= 88 ? p : p + Math.max(0.4, (88 - p) * 0.04));
+            }, 700);
+        } else {
+            clearInterval(progressIntervalRef.current);
+            setFakeProgress(0);
+        }
+        return () => clearInterval(progressIntervalRef.current);
+    }, [isScanning]);
+
+    useEffect(() => {
+        apiFetch({ path: '/wp/v2/settings' }).then(s => {
+            setClientId(s.gleo_client_id || '');
+            setSecretKey(s.gleo_secret_key || '');
+            setOverrideSchema(s.gleo_override_schema || false);
+        });
+        apiFetch({ path: '/wp/v2/posts?per_page=20&status=publish' })
+            .then(posts => { setAvailablePosts(posts); setSelectedPosts(posts.slice(0, 5).map(p => p.id)); setIsLoadingPosts(false); })
+            .catch(() => setIsLoadingPosts(false));
+        checkScanStatus();
+    }, []);
+
+    const checkScanStatus = () => {
+        apiFetch({ path: '/gleo/v1/scan/status' })
+            .then(res => {
+                setIsScanning(res.is_scanning); setScanProgress(res.progress);
+                if (res.results?.length > 0) {
+                    setScanResults(res.results);
+                    if (!res.is_scanning && scanJustStarted.current) {
+                        setShowScanModal(true); scanJustStarted.current = false;
+                    }
+                }
+                if (res.is_scanning) setTimeout(checkScanStatus, 3000);
+            }).catch(() => {});
+    };
+
+    const handleSave = () => {
+        setIsSaving(true); setSaveStatus(null);
+        apiFetch({ path: '/wp/v2/settings', method: 'POST', data: { gleo_client_id: clientId, gleo_secret_key: secretKey } })
+            .then(() => setSaveStatus({ type: 'success', message: 'Settings saved.' }))
+            .catch(err => setSaveStatus({ type: 'error', message: err.message || 'Error saving.' }))
+            .finally(() => setIsSaving(false));
+    };
+
+    const handleScan = () => {
+        if (selectedPosts.length === 0) { setSaveStatus({ type: 'error', message: 'Select at least one post.' }); return; }
+        scanJustStarted.current = true;
+        setIsScanning(true); setScanProgress(0); setScanResults([]); setSaveStatus(null);
+        apiFetch({ path: '/gleo/v1/scan/start', method: 'POST', data: { post_ids: selectedPosts } })
+            .then(res => { setSaveStatus({ type: 'success', message: res.message }); checkScanStatus(); })
+            .catch(err => { setSaveStatus({ type: 'error', message: err.message || 'Error starting scan.' }); setIsScanning(false); });
+    };
+
+    const siteHostname = typeof gleoData !== 'undefined' ? (() => { try { return new URL(gleoData.siteUrl).hostname; } catch(e) { return 'your site'; } })() : 'your site';
+
+    const scannedPostIds = useMemo( () => new Set( ( scanResults || [] ).map( r => r.post_id ) ), [ scanResults ] );
+    const avgGeoScore = scanResults.length
+        ? Math.round( scanResults.reduce( ( s, r ) => s + ( r.result?.geo_score || 0 ), 0 ) / scanResults.length )
+        : null;
+    const postsUnscanned = useMemo( () => {
+        if ( ! availablePosts.length ) {
+            return 0;
+        }
+        return availablePosts.filter( p => ! scannedPostIds.has( p.id ) ).length;
+    }, [ availablePosts, scannedPostIds ] );
+    const criticalIssuesCount = scanResults.reduce( ( s, r ) =>
+        s + ( r.result?.recommendations || [] ).filter( rec => rec.priority === 'critical' ).length, 0 );
+
+    return (
+        <div className="gleo-dashboard">
+            {/* Sidebar */}
+            <aside className="gleo-sidebar">
+                <div className="gleo-sidebar-top">
+                    <div className="gleo-logo">gl<em>eo</em></div>
+                    <div className="gleo-workspace">
+                        <span className="gleo-ws-dot"></span>
+                        <span className="gleo-ws-name">{siteHostname}</span>
+                    </div>
+                </div>
+                <nav className="gleo-nav">
+                    <div className="gleo-nav-group">Optimize</div>
+                    <div className={`gleo-nav-item ${activeTab === 'scan' ? 'active' : ''}`} onClick={() => setActiveTab('scan')}>
+                        <IconScan/>
+                        Dashboard
+                    </div>
+                    <div className={`gleo-nav-item ${activeTab === 'analytics' ? 'active' : ''}`} onClick={() => setActiveTab('analytics')}>
+                        <IconAnalytics/>
+                        Analytics
+                    </div>
+                    <div className="gleo-nav-group">Account</div>
+                    <div className={`gleo-nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
+                        <IconSettings/>
+                        Settings
+                    </div>
+                </nav>
+            </aside>
+
+            {/* Main content */}
+            <main className="gleo-main">
+
+                {/* Analysis (formerly Scan + Dashboard merged) */}
+                {activeTab === 'scan' && (
+                    <div>
+                        <div className="gleo-page-header">
+                            <div>
+                                <h1>Dashboard</h1>
+                                <p className="gleo-page-subtitle">AI search optimization for {siteHostname}</p>
+                            </div>
+                            { scanResults.length > 0 && (
+                                <div className="gleo-header-actions">
+                                    <button type="button" className="gleo-btn gleo-btn-outline" onClick={ () => setActiveTab( 'analytics' ) }>View Analytics</button>
+                                </div>
+                            ) }
+                        </div>
+
+                        <div className="gleo-metrics-strip" style={ { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 14, marginBottom: 22 } }>
+                            <div className="gleo-card" style={ { marginBottom: 0 } }>
+                                <div className="gleo-card-body" style={ { padding: '18px 20px' } }>
+                                    <div style={ { fontSize: 34, fontWeight: 800, color: 'var(--blue)', letterSpacing: -1, lineHeight: 1.1 } }>{ avgGeoScore !== null ? avgGeoScore : '—' }</div>
+                                    <p style={ { fontSize: 13, color: 'var(--fg-muted)', margin: '10px 0 0' } }>Avg GEO score</p>
+                                </div>
+                            </div>
+                            <div className="gleo-card" style={ { marginBottom: 0 } }>
+                                <div className="gleo-card-body" style={ { padding: '18px 20px' } }>
+                                    <div style={ { fontSize: 34, fontWeight: 800, color: 'var(--fg)', letterSpacing: -1, lineHeight: 1.1 } }>{ postsUnscanned }</div>
+                                    <p style={ { fontSize: 13, color: 'var(--fg-muted)', margin: '10px 0 0' } }>Posts unscanned</p>
+                                </div>
+                            </div>
+                            <div className="gleo-card" style={ { marginBottom: 0 } }>
+                                <div className="gleo-card-body" style={ { padding: '18px 20px' } }>
+                                    <div style={ { fontSize: 34, fontWeight: 800, color: criticalIssuesCount > 0 ? 'var(--red)' : 'var(--green)', letterSpacing: -1, lineHeight: 1.1 } }>{ criticalIssuesCount }</div>
+                                    <p style={ { fontSize: 13, color: 'var(--fg-muted)', margin: '10px 0 0' } }>Critical issues</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {saveStatus && <div className={`gleo-notice ${saveStatus.type}`}>{saveStatus.message}</div>}
+
+                        {/* Results — shown once results exist */}
+                        {scanResults.length > 0 && (
+                            <>
+                                <div className="gleo-section-label" style={{ marginBottom: 10 }}>
+                                    Results — {scanResults.length} post{scanResults.length !== 1 ? 's' : ''}
+                                </div>
+                                { scanResults.map( r => (
+                                    <GeoReportCard key={ r.post_id } report={ r } totalReportCards={ scanResults.length }/>
+                                ) ) }
+                            </>
+                        )}
+
+                        {/* Post selection + scan trigger */}
+                        <div className="gleo-card" style={{ marginBottom: 24, marginTop: scanResults.length > 0 ? 24 : 0 }}>
+                            <div className="gleo-card-header">
+                                <h3>Select posts to analyze</h3>
+                                <span className="gleo-card-meta">{selectedPosts.length} selected</span>
+                            </div>
+                            <div className="gleo-card-body">
+                                {isLoadingPosts ? (
+                                    <p style={{ fontSize: 13, color: 'var(--fg-muted)' }}>Loading posts…</p>
+                                ) : (
+                                    <div className="gleo-post-list">
+                                        {availablePosts.map(post => (
+                                            <div key={post.id} className="gleo-post-item"
+                                                onClick={() => setSelectedPosts(p => p.includes(post.id) ? p.filter(id => id !== post.id) : [...p, post.id])}>
+                                                <input type="checkbox" checked={selectedPosts.includes(post.id)} onChange={() => {}}/>
+                                                <label>{post.title.rendered || `Post #${post.id}`}</label>
+                                            </div>
+                                        ))}
+                                        {availablePosts.length === 0 && (
+                                            <p style={{ padding: 8, fontSize: 13, color: 'var(--fg-muted)' }}>No published posts found.</p>
+                                        )}
+                                    </div>
+                                )}
+                                <button className="gleo-btn gleo-btn-primary"
+                                    style={{ padding: '9px 24px', fontSize: 13.5, marginTop: 12 }}
+                                    onClick={handleScan} disabled={isScanning || selectedPosts.length === 0}>
+                                    {isScanning ? 'Analyzing posts…' : `Analyze ${selectedPosts.length} post${selectedPosts.length !== 1 ? 's' : ''}`}
+                                </button>
+                                {isScanning && (
+                                    <div style={{ marginTop: 14 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                                            <span style={{ fontSize: 12.5, color: 'var(--fg-muted)' }}>Analyzing with AI…</span>
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg-muted)' }}>
+                                                {Math.round(scanProgress > 0 ? scanProgress : fakeProgress)}%
+                                            </span>
+                                        </div>
+                                        <div className="gleo-progress-bar">
+                                            <div className="gleo-progress-fill"
+                                                style={{ width: `${Math.min(scanProgress > 0 ? scanProgress : fakeProgress, 100)}%` }}/>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {showScanModal && (
+                            <ScanCompleteModal onClose={ () => setShowScanModal( false ) }/>
+                        )}
+                    </div>
+                )}
+
+                { activeTab === 'analytics' && <AnalyticsTab/> }
+
+                {/* Settings */}
+                {activeTab === 'settings' && (
+                    <SettingsPanel
+                        clientId={clientId} setClientId={setClientId}
+                        secretKey={secretKey} setSecretKey={setSecretKey}
+                        onSave={handleSave} isSaving={isSaving} saveStatus={saveStatus}
+                        overrideSchema={overrideSchema} setOverrideSchema={setOverrideSchema}/>
+                )}
+            </main>
+        </div>
+    );
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    const root = document.getElementById('gleo-admin-app');
+    if (root) render(<App/>, root);
+});

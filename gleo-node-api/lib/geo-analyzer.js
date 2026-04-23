@@ -1,0 +1,524 @@
+const axios = require('axios');
+const cheerio = require('cheerio');
+const { GoogleGenAI } = require('@google/genai');
+
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+const TAVILY_SEARCH_URL = 'https://api.tavily.com/search';
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GOOGLE_GENAI_API_KEY,
+});
+
+/**
+ * Generates specifically contextual HTML elements dynamically based on the post.
+ */
+async function generateContextualAssets(title, content) {
+  const $ = cheerio.load(content || '');
+  $('script, style, noscript, svg, path, iframe, nav, footer, header, aside').remove();
+  const plainText = $('body').text().replace(/\s+/g, ' ').substring(0, 3000).trim();
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        { role: "user", parts: [{ text: `Article title: ${title}\nArticle excerpt (from the page): ${plainText}\n\nWrite HTML snippets this site could paste into WordPress. Stay tightly on the article's real subject and facts from the excerpt. Do not use meta filler, SEO clichés, or template phrases (avoid wording like: "key details", "what you need to know", "deep dive", "key takeaways", "important considerations", "really", duplicated phrases, or headings that sound like a content mill). Headings (H2/H3) must read like a human editor chose them for readers—specific to this topic—not generic labels. Include: (1) a comparison table in <figure class="wp-block-table"><table>...</table></figure>, (2) a short FAQ (one clear H2 title + H3 questions + answers), (3) one extra section (H2 + paragraph) that continues the article substance, (4) a compact Q&A block, (5) one paragraph of plausible, topic-relevant statistics written as normal sentences (no heading).` }] }
+      ],
+      config: {
+        systemInstruction: "You are an experienced web editor. Output valid, minimal HTML fragments suitable for WordPress. Use only the supplied title and excerpt; be specific and natural. Never use generic SEO headings or repetitive filler. Return strict JSON only.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            data_table_html: { type: "STRING", description: "Comparison table about the article topic only; <figure class=\"wp-block-table\"><table>...</table></figure>." },
+            faq_html: { type: "STRING", description: "FAQ: one concrete H2 title + 2–3 H3 questions with <p> answers; wording must match the article topic." },
+            depth_html: { type: "STRING", description: "One H2 (specific to the topic, not a generic label) plus one <p> that adds useful detail grounded in the excerpt." },
+            qa_html: { type: "STRING", description: "Short Q&A block: natural question heading plus direct answer paragraph about the article's core idea." },
+            authority_html: { type: "STRING", description: "Single <p> only: 2–3 on-topic statistics or figures as flowing prose—no headings or labels." }
+          },
+          required: ["data_table_html", "faq_html", "depth_html", "qa_html", "authority_html"]
+        }
+      }
+    });
+    
+    try {
+      return JSON.parse(response.text);
+    } catch (e) {
+      console.error('[GEO] Failed to parse Gemini response:', e.message);
+      throw new Error("Gemini parsing failed");
+    }
+  } catch (err) {
+    console.error('[GEO] Gemini API failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Analyzes a single post for Generative Engine Optimization (GEO).
+ * Uses Tavily to understand how AI engines see the post's topic,
+ * then scores the post and generates actionable recommendations based on live HTML.
+ *
+ * @param {Object} post - { id, title, content (Live HTML) }
+ * @param {string} siteUrl - The WordPress site URL for brand detection
+ * @returns {Object} Full GEO report for this post
+ */
+async function analyzePost(post, siteUrl = '') {
+  const { id, title, content } = post;
+  console.log(`  [GEO] Analyzing post ${id}: "${title}"`);
+
+  // --- Step 1: Tavily Search - How do AI engines respond to this topic? ---
+  let tavilyResults = [];
+  try {
+    const searchQuery = title.length > 10 ? title : `${title} ${content.substring(0, 100)}`;
+    const response = await axios.post(TAVILY_SEARCH_URL, {
+      api_key: TAVILY_API_KEY,
+      query: searchQuery,
+      search_depth: 'advanced',
+      include_answer: true,
+      include_raw_content: false,
+      max_results: 5
+    });
+    tavilyResults = response.data.results || [];
+    console.log(`  [GEO] Tavily returned ${tavilyResults.length} results for "${title}"`);
+  } catch (err) {
+    console.error(`  [GEO] Tavily search failed for post ${id}:`, err.message);
+  }
+
+  // --- Step 2: Brand Inclusion Rate (0-10) ---
+  const brandInclusionRate = calculateBrandInclusion(tavilyResults, siteUrl, title);
+
+  // --- Step 3: Content Quality Signals (HTML Parsing) ---
+  const contentSignals = analyzeContentSignals(content, title);
+
+  // --- Step 4: GEO Score (0-100) ---
+  const geoScore = calculateGeoScore(contentSignals, brandInclusionRate, tavilyResults);
+
+  // --- Step 5: Generate JSON-LD Schema ---
+  const jsonLdSchema = generateJsonLd(title, content, siteUrl);
+  
+  // --- Step 6: Generate Contextual Assets ---
+  const contextualAssets = await generateContextualAssets(title, content);
+
+  // --- Step 7: Build Specific Recommendations (Granular Scoring) ---
+  const recommendations = generateRecommendations(contentSignals, brandInclusionRate, geoScore);
+
+  return {
+    id,
+    data: {
+      title,
+      geo_score: geoScore,
+      brand_inclusion_rate: brandInclusionRate,
+      json_ld_schema: jsonLdSchema,
+      contextual_assets: contextualAssets,
+      recommendations,
+      content_signals: contentSignals,
+      ai_landscape: tavilyResults.slice(0, 3).map(r => ({
+        title: r.title,
+        url: r.url,
+        relevance: r.score ? Math.round(r.score * 100) : null
+      }))
+    }
+  };
+}
+
+/**
+ * Calculates Brand Inclusion Rate (0-10).
+ * Measures how visible the brand/site is in AI-generated search results.
+ */
+function calculateBrandInclusion(results, siteUrl, postTitle) {
+  if (!results.length) return 0;
+
+  let score = 0;
+  const siteDomain = siteUrl ? new URL(siteUrl).hostname.replace('www.', '') : '';
+  const titleWords = postTitle.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+
+  for (const result of results) {
+    const resultText = `${result.title || ''} ${result.content || ''} ${result.url || ''}`.toLowerCase();
+
+    // Direct domain match (strongest signal)
+    if (siteDomain && resultText.includes(siteDomain)) {
+      score += 3;
+    }
+
+    // Title keyword overlap (moderate signal)
+    const matchingWords = titleWords.filter(w => resultText.includes(w));
+    if (matchingWords.length >= 2) {
+      score += 1;
+    }
+  }
+
+  return Math.min(10, Math.round(score));
+}
+
+/**
+ * Analyzes the post live HTML for the 5-pillar GEO quality signals using Cheerio.
+ */
+function analyzeContentSignals(htmlContent, title) {
+  const $ = cheerio.load(htmlContent || '');
+  
+  // Re-load original HTML to check head for schema
+  const $full = cheerio.load(htmlContent || '');
+  
+  // Remove noise
+  $('script, style, noscript, nav, footer, header, aside').remove();
+  const plainText = $('body').text() || '';
+  const cleanText = plainText.replace(/\s+/g, ' ').trim();
+  const wordCount = cleanText.split(/\s+/).filter(w => w.length > 0).length;
+
+  // ── 1. Technical Crawlability ──
+  const images = $('img');
+  const imageCount = images.length;
+  const imagesWithAlt = images.filter((i, el) => {
+    const alt = $(el).attr('alt');
+    return alt && alt.trim().length > 3;
+  }).length;
+  const altTextCoverage = imageCount > 0 ? Math.round((imagesWithAlt / imageCount) * 100) : 100;
+  
+  const hasMetaRobotsBlock = $full('meta[name="robots"][content*="noindex"]').length > 0 ||
+                              $full('meta[name="robots"][content*="nofollow"]').length > 0;
+  const hasLlmsTxtRef = /llms\.txt/i.test(htmlContent);
+
+  // ── 2. Structured Data & Schema ──
+  const schemaScripts = $full('script[type="application/ld+json"]');
+  const hasSchema = schemaScripts.length > 0;
+  let hasFaqSchema = false;
+  let hasOrgSchema = false;
+  schemaScripts.each((i, el) => {
+    const txt = $(el).text();
+    if (/FAQPage/i.test(txt)) hasFaqSchema = true;
+    if (/Organization|LocalBusiness|Product|Person/i.test(txt)) hasOrgSchema = true;
+  });
+
+  // ── 3. Content Quality ──
+  const paragraphs = $('p').map((i, el) => $(el).text().trim()).get().filter(p => p.length > 20);
+  const avgParagraphLength = paragraphs.length > 0
+    ? Math.round(paragraphs.reduce((sum, p) => sum + p.split(/\s+/).length, 0) / paragraphs.length)
+    : 0;
+  
+  // Direct answer detection: first substantial paragraph is 60-100 words (inverted pyramid)
+  const firstParaWords = paragraphs.length > 0 ? paragraphs[0].split(/\s+/).length : 0;
+  const hasDirectAnswer = firstParaWords >= 40 && firstParaWords <= 120;
+  
+  // Conversational query targeting
+  const hasConversationalQueries = /\b(best|how to|what is|why|can i|should i|compared to|vs\.?|for a)\b/i.test(cleanText);
+  
+  // Check for TL;DR or summary blocks
+  const hasTldr = /tl;?dr|summary|key takeaway|at a glance|quick answer/i.test(cleanText);
+  
+  const hasDirectAnswers = /\b(is|are|was|were|can|does|do|will|how|what|why|when|where)\b[^.?]*\?/i.test(cleanText);
+
+  // ── 4. Credibility ──
+  const statsMatches = cleanText.match(/\d+%|\d+\s*(percent|million|billion|thousand)/ig);
+  const statCount = statsMatches ? statsMatches.length : 0;
+  const hasStatistics = statCount > 0;
+  
+  const citationCount = $('a[href^="http"]').length;
+  const hasCitations = citationCount > 0;
+  
+  const hasQuotes = $('blockquote').length > 0 || /"[^"]{20,}"/.test(cleanText);
+
+  // ── 5. AI-Specific Formatting ──
+  const headingCount = $('h2, h3, h4, h5, h6').length;
+  const hasHeadings = headingCount > 0;
+  
+  const listCount = $('ul, ol').length;
+  const hasList = listCount > 0;
+  
+  const hasTable = $('table').length > 0;
+  
+  const hasFAQ = /faq|frequently\s+asked|common\s+questions/i.test(cleanText);
+  
+  // Long paragraph detection (paragraphs > 80 words)
+  const longParagraphs = paragraphs.filter(p => p.split(/\s+/).length > 80).length;
+
+  return {
+    word_count: wordCount,
+    // Technical
+    image_count: imageCount,
+    images_with_alt: imagesWithAlt,
+    alt_text_coverage: altTextCoverage,
+    has_meta_robots_block: hasMetaRobotsBlock,
+    has_llms_txt: hasLlmsTxtRef,
+    // Schema
+    has_schema: hasSchema,
+    has_faq_schema: hasFaqSchema,
+    has_org_schema: hasOrgSchema,
+    // Content Quality
+    has_direct_answer: hasDirectAnswer,
+    has_conversational_queries: hasConversationalQueries,
+    has_tldr: hasTldr,
+    has_direct_answers: hasDirectAnswers,
+    first_para_words: firstParaWords,
+    // Credibility
+    has_statistics: hasStatistics,
+    stat_count: statCount,
+    has_citations: hasCitations,
+    citation_count: citationCount,
+    has_quotes: hasQuotes,
+    // AI Formatting
+    has_headings: hasHeadings,
+    heading_count: headingCount,
+    has_lists: hasList,
+    list_item_count: listCount,
+    has_table: hasTable,
+    has_faq: hasFAQ,
+    has_images: imageCount > 0,
+    paragraph_count: paragraphs.length,
+    avg_paragraph_length: avgParagraphLength,
+    long_paragraphs: longParagraphs
+  };
+}
+
+/**
+ * Calculates the overall GEO score (0-100) using the 5-pillar framework.
+ */
+function calculateGeoScore(signals, brandRate, tavilyResults) {
+  let score = 0;
+
+  // ── 1. Technical Crawlability (max 15) ──
+  // Alt text coverage: 5 pts
+  if (signals.alt_text_coverage >= 90) score += 5;
+  else if (signals.alt_text_coverage >= 50) score += 3;
+  else if (signals.image_count === 0) score += 5; // No images = no penalty
+  
+  // No robots blocking: 5 pts
+  if (!signals.has_meta_robots_block) score += 5;
+  
+  // llms.txt: 5 pts
+  if (signals.has_llms_txt) score += 5;
+
+  // ── 2. Structured Data & Schema (max 20) ──
+  if (signals.has_schema) score += 10;
+  if (signals.has_faq_schema) score += 5;
+  if (signals.has_org_schema) score += 5;
+
+  // ── 3. Content Quality (max 30) ──
+  // Depth: 10 pts
+  if (signals.word_count >= 2000) score += 10;
+  else if (signals.word_count >= 1200) score += 7;
+  else if (signals.word_count >= 600) score += 4;
+  else if (signals.word_count > 0) score += 1;
+  
+  // Direct answer / inverted pyramid: 10 pts
+  if (signals.has_direct_answer) score += 5;
+  if (signals.has_tldr) score += 5;
+  
+  // Conversational query targeting: 5 pts
+  if (signals.has_conversational_queries) score += 3;
+  if (signals.has_direct_answers) score += 2;
+  
+  // Content specificity: 5 pts
+  if (signals.word_count >= 800 && signals.has_statistics) score += 3;
+  if (signals.has_quotes) score += 2;
+
+  // ── 4. Credibility (max 15) ──
+  // Statistics: 5 pts
+  if (signals.stat_count >= 3) score += 5;
+  else if (signals.stat_count >= 1) score += 3;
+  
+  // Outbound citations: 5 pts
+  if (signals.citation_count >= 3) score += 5;
+  else if (signals.citation_count >= 1) score += 3;
+  
+  // Expert quotes: 5 pts
+  if (signals.has_quotes) score += 5;
+
+  // ── 5. AI-Specific Formatting (max 20) ──
+  // Semantic headings: 5 pts
+  if (signals.heading_count >= 4) score += 5;
+  else if (signals.heading_count >= 2) score += 3;
+  else if (signals.has_headings) score += 1;
+  
+  // Short paragraphs: 5 pts
+  if (signals.long_paragraphs === 0 && signals.paragraph_count > 0) score += 5;
+  else if (signals.long_paragraphs <= 2) score += 3;
+  
+  // Lists: 4 pts
+  if (signals.list_item_count >= 3) score += 4;
+  else if (signals.has_lists) score += 2;
+
+  // FAQ block: 3 pts
+  if (signals.has_faq) score += 3;
+  
+  // Comparison tables: 3 pts
+  if (signals.has_table) score += 3;
+
+  return Math.min(100, score);
+}
+
+// Answer Capsule function removed per user request
+
+/**
+ * Generates JSON-LD structured data schema for the post.
+ */
+function generateJsonLd(title, content, siteUrl) {
+  const plainText = (content || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  const description = plainText.substring(0, 160).trim();
+  const wordCount = plainText.split(/\s+/).length;
+
+  const schema = {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    'headline': title,
+    'description': description,
+    'wordCount': wordCount,
+    'author': {
+      '@type': 'Organization',
+      'name': siteUrl ? new URL(siteUrl).hostname : 'Author'
+    },
+    'datePublished': new Date().toISOString(),
+    'mainEntityOfPage': {
+      '@type': 'WebPage',
+      '@id': siteUrl || ''
+    }
+  };
+
+  // If content has FAQ-like patterns, add FAQPage schema
+  const faqMatches = plainText.match(/(?:what|how|why|when|where|who|can|does|is)\s[^?]*\?/gi);
+  if (faqMatches && faqMatches.length >= 2) {
+    schema['@type'] = ['Article', 'FAQPage'];
+    schema['mainEntity'] = faqMatches.slice(0, 5).map(q => ({
+      '@type': 'Question',
+      'name': q.trim(),
+      'acceptedAnswer': {
+        '@type': 'Answer',
+        'text': 'See the full article for a detailed answer.'
+      }
+    }));
+  }
+
+  return schema;
+}
+
+/**
+ * Generates specific, actionable GEO recommendations based on the 5-pillar framework.
+ */
+function generateRecommendations(signals, brandRate, geoScore) {
+  const recs = [];
+
+  // ── 1. Technical Crawlability ──
+  {
+    let score = 0;
+    if (!signals.has_meta_robots_block) score += 5;
+    if (signals.alt_text_coverage >= 90 || signals.image_count === 0) score += 5;
+    if (signals.has_llms_txt) score += 5;
+    
+    if (score < 15) {
+      const issues = [];
+      if (signals.has_meta_robots_block) issues.push('Remove robots meta noindex/nofollow — AI bots need access');
+      if (signals.image_count > 0 && signals.alt_text_coverage < 90) issues.push(`Only ${signals.alt_text_coverage}% of images have descriptive alt text`);
+      if (!signals.has_llms_txt) issues.push('No /llms.txt reference in page HTML — Gleo serves /llms.txt and adds a head link; re-scan after deploy');
+      recs.push({
+        priority: score <= 5 ? 'critical' : 'medium',
+        area: 'Technical Crawlability',
+        score, maxScore: 15,
+        message: issues.join('. ') + '.'
+      });
+    }
+  }
+
+  // ── 2. Structured Data & Schema ──
+  {
+    let score = 0;
+    if (signals.has_schema) score += 10;
+    if (signals.has_faq_schema) score += 5;
+    if (signals.has_org_schema) score += 5;
+    
+    if (score < 20) {
+      const issues = [];
+      if (!signals.has_schema) issues.push('Deploy JSON-LD schema markup so AI understands your content');
+      if (!signals.has_faq_schema) issues.push('Add FAQPage schema — matches the Q&A format AI loves');
+      if (!signals.has_org_schema) issues.push('Add Organization/LocalBusiness/Product schemas as needed');
+      recs.push({
+        priority: !signals.has_schema ? 'critical' : 'medium',
+        area: 'Structured Data & Schema',
+        score, maxScore: 20,
+        message: issues.join('. ') + '.'
+      });
+    }
+  }
+
+  // ── 3. Content Quality ──
+  {
+    let score = 0;
+    if (signals.word_count >= 2000) score += 10;
+    else if (signals.word_count >= 1200) score += 7;
+    else if (signals.word_count >= 600) score += 4;
+    else if (signals.word_count > 0) score += 1;
+    if (signals.has_direct_answer) score += 5;
+    if (signals.has_tldr) score += 5;
+    if (signals.has_conversational_queries) score += 3;
+    if (signals.has_direct_answers) score += 2;
+    if (signals.word_count >= 800 && signals.has_statistics) score += 3;
+    if (signals.has_quotes) score += 2;
+    score = Math.min(30, score);
+    
+    if (score < 30) {
+      const issues = [];
+      if (signals.word_count < 1200) issues.push(`Content is ${signals.word_count} words — aim for 1,200+ with depth`);
+      if (!signals.has_direct_answer) issues.push('Put a 60-100 word direct answer at the very top (inverted pyramid)');
+      if (!signals.has_tldr) issues.push('Add a TL;DR or "Key Takeaways" summary block');
+      if (!signals.has_conversational_queries) issues.push('Target long-tail conversational queries users ask AI');
+      recs.push({
+        priority: score <= 10 ? 'critical' : score <= 20 ? 'high' : 'medium',
+        area: 'Content Quality',
+        score, maxScore: 30,
+        message: issues.join('. ') + '.'
+      });
+    }
+  }
+
+  // ── 4. Credibility ──
+  {
+    let score = 0;
+    if (signals.stat_count >= 3) score += 5;
+    else if (signals.stat_count >= 1) score += 3;
+    if (signals.citation_count >= 3) score += 5;
+    else if (signals.citation_count >= 1) score += 3;
+    if (signals.has_quotes) score += 5;
+    
+    if (score < 15) {
+      const issues = [];
+      if (signals.stat_count < 3) issues.push('Add unique first-party statistics — AI craves data it hasn\'t seen');
+      if (signals.citation_count < 3) issues.push('Add outbound links to authoritative sources for credibility');
+      if (!signals.has_quotes) issues.push('Include expert quotes or real testimonials');
+      recs.push({
+        priority: score <= 5 ? 'high' : 'medium',
+        area: 'Credibility',
+        score, maxScore: 15,
+        message: issues.join('. ') + '.'
+      });
+    }
+  }
+
+  // ── 5. AI-Specific Formatting ──
+  {
+    let score = 0;
+    if (signals.heading_count >= 4) score += 5;
+    else if (signals.heading_count >= 2) score += 3;
+    else if (signals.has_headings) score += 1;
+    if (signals.long_paragraphs === 0 && signals.paragraph_count > 0) score += 5;
+    else if (signals.long_paragraphs <= 2) score += 3;
+    if (signals.list_item_count >= 3) score += 4;
+    else if (signals.has_lists) score += 2;
+    if (signals.has_faq) score += 3;
+    if (signals.has_table) score += 3;
+    
+    if (score < 20) {
+      const issues = [];
+      if (signals.heading_count < 4) issues.push(`Only ${signals.heading_count} headings — add H2s every ~3 paragraphs`);
+      if (signals.long_paragraphs > 0) issues.push(`${signals.long_paragraphs} paragraph(s) exceed 80 words — shorten them`);
+      if (!signals.has_lists) issues.push('Convert dense paragraphs into bulleted lists');
+      if (!signals.has_faq) issues.push('Inject a contextual FAQ block near the end');
+      if (!signals.has_table) issues.push('Add comparison tables — AI loves structured tabular data');
+      recs.push({
+        priority: score <= 8 ? 'high' : 'medium',
+        area: 'AI-Specific Formatting',
+        score, maxScore: 20,
+        message: issues.join('. ') + '.'
+      });
+    }
+  }
+
+  return recs;
+}
+
+module.exports = { analyzePost };
