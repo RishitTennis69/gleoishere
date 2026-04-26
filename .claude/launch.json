@@ -5,7 +5,7 @@
       "name": "gleo-node-api",
       "runtimeExecutable": "node",
       "runtimeArgs": ["index.js"],
-      "port": 3000,
+      "port": 8765,
       "autoPort": false,
       "cwd": "C:\\Users\\Krish Grover\\Documents\\gleoishere-main-main\\gleo-node-api"
     },

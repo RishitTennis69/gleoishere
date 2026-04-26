@@ -8,7 +8,7 @@ class Gleo_Tracking {
     }
 
     private function get_api_base() {
-        $base = defined( 'GLEO_NODE_API_URL' ) ? GLEO_NODE_API_URL : 'http://localhost:3000';
+        $base = defined( 'GLEO_NODE_API_URL' ) ? GLEO_NODE_API_URL : 'http://localhost:8765';
         return apply_filters( 'gleo_node_api_url', $base );
     }
 

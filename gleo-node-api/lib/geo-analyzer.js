@@ -9,6 +9,33 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GOOGLE_GENAI_API_KEY,
 });
 
+const GENERIC_COPY_PATTERNS = [
+  /awaken your senses/i,
+  /finest artisanal/i,
+  /perfect morning/i,
+  /why choose us/i,
+  /deeper dive/i,
+  /elevate your/i,
+  /crafted with passion/i,
+  /unleash/i,
+  /experience the/i,
+];
+
+function looksGenericCopy(html = '') {
+  if (!html || typeof html !== 'string') return false;
+  return GENERIC_COPY_PATTERNS.some((re) => re.test(html));
+}
+
+function sanitizeContextualAssets(assets) {
+  if (!assets || typeof assets !== 'object') return null;
+  const keys = ['data_table_html', 'faq_html', 'depth_html', 'qa_html', 'authority_html'];
+  for (const key of keys) {
+    if (!assets[key] || typeof assets[key] !== 'string') return null;
+    if (looksGenericCopy(assets[key])) return null;
+  }
+  return assets;
+}
+
 /**
  * Generates specifically contextual HTML elements dynamically based on the post.
  */
@@ -20,10 +47,10 @@ async function generateContextualAssets(title, content) {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [
-        { role: "user", parts: [{ text: `Article title: ${title}\nArticle excerpt (from the page): ${plainText}\n\nWrite HTML snippets this site could paste into WordPress. Stay tightly on the article's real subject and facts from the excerpt. Do not use meta filler, SEO clichés, or template phrases (avoid wording like: "key details", "what you need to know", "deep dive", "key takeaways", "important considerations", "really", duplicated phrases, or headings that sound like a content mill). Headings (H2/H3) must read like a human editor chose them for readers—specific to this topic—not generic labels. Include: (1) a comparison table in <figure class="wp-block-table"><table>...</table></figure>, (2) a short FAQ (one clear H2 title + H3 questions + answers), (3) one extra section (H2 + paragraph) that continues the article substance, (4) a compact Q&A block, (5) one paragraph of plausible, topic-relevant statistics written as normal sentences (no heading).` }] }
+        { role: "user", parts: [{ text: `Article title: ${title}\nArticle excerpt (from the page): ${plainText}\n\nWrite HTML snippets this site could paste into WordPress. Stay tightly on the article's real subject and facts from the excerpt. Do not use meta filler, SEO clichés, or template phrases (avoid wording like: "key details", "what you need to know", "deep dive", "key takeaways", "important considerations", "really", duplicated phrases, or headings that sound like a content mill).\n\nNever write marketing slogans or ad copy. Specifically avoid lines like "awaken your senses", "experience the finest", "perfect morning", "crafted with passion", "why choose us", or similar promo language.\n\nFormatting rules:\n- Keep visual hierarchy clean: main section titles are H2; sub-sections inside cards/columns should be H3 or H4 (not H2).\n- Never use inline fixed heights/min-heights/overflow clipping styles.\n- If you output multi-column or multi-card content, keep each column structurally parallel (same type of container, similar heading level + paragraph/list pattern).\n- Ensure link and text colors stay readable on dark backgrounds (high contrast, no dark text on dark backgrounds).\n- Table headers must be concise and prominent.\n\nInclude: (1) a comparison table in <figure class=\"wp-block-table\"><table>...</table></figure>, (2) a short FAQ (one clear H2 title + H3 questions + answers), (3) one extra section (H2 + paragraph) that continues the article substance, (4) a compact Q&A block, (5) one paragraph of plausible, topic-relevant statistics written as normal sentences (no heading).` }] }
       ],
       config: {
-        systemInstruction: "You are an experienced web editor. Output valid, minimal HTML fragments suitable for WordPress. Use only the supplied title and excerpt; be specific and natural. Never use generic SEO headings or repetitive filler. Return strict JSON only.",
+        systemInstruction: "You are an experienced web editor and accessibility-minded frontend writer. Output valid, minimal HTML fragments suitable for WordPress. Use only the supplied title and excerpt; be specific and natural. Never use generic SEO headings, marketing slogans, or repetitive filler. Keep structure balanced, readable, and semantically correct. Return strict JSON only.",
         responseMimeType: "application/json",
         responseSchema: {
           type: "OBJECT",
@@ -40,7 +67,7 @@ async function generateContextualAssets(title, content) {
     });
     
     try {
-      return JSON.parse(response.text);
+      return sanitizeContextualAssets(JSON.parse(response.text));
     } catch (e) {
       console.error('[GEO] Failed to parse Gemini response:', e.message);
       throw new Error("Gemini parsing failed");
@@ -455,7 +482,7 @@ function generateRecommendations(signals, brandRate, geoScore) {
       const issues = [];
       if (signals.word_count < 1200) issues.push(`Content is ${signals.word_count} words — aim for 1,200+ with depth`);
       if (!signals.has_direct_answer) issues.push('Put a 60-100 word direct answer at the very top (inverted pyramid)');
-      if (!signals.has_tldr) issues.push('Add a TL;DR or "Key Takeaways" summary block');
+      if (!signals.has_tldr) issues.push('Add a Key takeaways summary block near the top');
       if (!signals.has_conversational_queries) issues.push('Target long-tail conversational queries users ask AI');
       recs.push({
         priority: score <= 10 ? 'critical' : score <= 20 ? 'high' : 'medium',

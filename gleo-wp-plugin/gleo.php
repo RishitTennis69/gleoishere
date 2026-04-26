@@ -129,7 +129,7 @@ function gleo_admin_scripts( $hook ) {
 			$seo_plugin_name = 'RankMath';
 		}
 
-		$node_api_url = defined( 'GLEO_NODE_API_URL' ) ? GLEO_NODE_API_URL : 'http://localhost:3000';
+		$node_api_url = defined( 'GLEO_NODE_API_URL' ) ? GLEO_NODE_API_URL : 'http://localhost:8765';
 		$node_api_url = apply_filters( 'gleo_node_api_url', $node_api_url );
 
 		$top_posts  = get_posts( array( 'posts_per_page' => 20, 'post_status' => 'publish' ) );

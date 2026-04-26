@@ -667,6 +667,28 @@
   transition: width 0.7s ease;
 }
 
+.gleo-progress-bar--indeterminate {
+  position: relative;
+}
+.gleo-progress-indeterminate-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 36%;
+  height: 100%;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--blue) 0%, var(--blue-mid) 100%);
+  animation: gleo-indeterminate-slide 1.35s ease-in-out infinite;
+}
+@keyframes gleo-indeterminate-slide {
+  0% {
+    transform: translateX(-30%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
 /* ── Before/after ───────────────────────────────────── */
 .gleo-before-after { display: flex; gap: 14px; align-items: stretch; }
 .gleo-ba-column {
@@ -777,6 +799,7 @@
   position: fixed; inset: 0; z-index: 99999;
   background: #0c1120;
   display: flex; flex-direction: column;
+  min-height: 0;
 }
 .gleo-preview-header {
   padding: 11px 20px;
@@ -807,7 +830,29 @@
   text-transform: none;
 }
 .gleo-preview-header h4 { margin: 0; color: #f1f5f9; font-size: 14px; font-weight: 600; }
-.gleo-preview-body { display: flex; flex: 1; overflow: hidden; }
+.gleo-preview-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+.gleo-preview-body--flex {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.gleo-preview-iframe-shell {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.gleo-preview-iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: #fff;
+  transition: opacity 0.5s ease;
+}
 .gleo-preview-sidebar {
   width: 292px; flex-shrink: 0;
   background: #0c1120;

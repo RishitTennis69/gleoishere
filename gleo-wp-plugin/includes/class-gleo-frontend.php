@@ -29,6 +29,9 @@ class Gleo_Frontend {
 
 		// REST endpoints for applying fixes
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
+
+		// Optional: append Allow rules for common AI crawlers (enabled via Gleo apply action).
+		add_filter( 'robots_txt', array( $this, 'append_ai_crawler_allows_to_robots_txt' ), 99, 2 );
 	}
 
 	/**
@@ -103,7 +106,12 @@ class Gleo_Frontend {
 <style id="gleo-preview-fallback">
 /* Readable fallback background only — typography comes from the theme. */
 body.gleo-preview-context { background-color: #f8fafc; color: #0f172a; }
-body.gleo-preview-context a { color: #0369a1; }
+body.gleo-preview-context a { color: inherit; }
+body.gleo-preview-context nav a,
+body.gleo-preview-context header a,
+body.gleo-preview-context .site-header a {
+  color: #f8fafc !important;
+}
 /* Block / classic themes often cap “content width”; in the Gleo iframe we want full layout width. */
 body.gleo-preview-context {
   --wp--style--global--content-size: 100% !important;
@@ -125,6 +133,13 @@ body.gleo-preview-context .is-layout-constrained > :where(:not(.alignleft):not(.
 }
 body.gleo-preview-context .alignwide,
 body.gleo-preview-context .alignfull {
+  max-width: none !important;
+  width: 100% !important;
+}
+body.gleo-preview-context #page,
+body.gleo-preview-context .site,
+body.gleo-preview-context .container,
+body.gleo-preview-context .site-content {
   max-width: none !important;
   width: 100% !important;
 }
@@ -261,7 +276,7 @@ main h2.wp-block-heading.gleo-section-heading,
 	font-weight: var(--wp--custom--heading--font-weight, 700);
 	letter-spacing: var(--wp--custom--heading--letter-spacing, -0.02em);
 	line-height: var(--wp--custom--heading--line-height, 1.25);
-	color: var(--wp--preset--color--contrast, var(--wp--preset--color--foreground, inherit));
+	color: inherit;
 	margin-top: var(--wp--preset--spacing--60, 1.5em);
 	margin-bottom: var(--wp--preset--spacing--40, 0.65em);
 }
@@ -294,7 +309,7 @@ main h2.wp-block-heading.gleo-section-heading,
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--gc-text);
   line-height: 1.6;
-  margin: 1.75em 0;
+  margin: 2em 0;
   clear: both;
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
@@ -423,24 +438,27 @@ main h2.wp-block-heading.gleo-section-heading,
   background: var(--gc-card);
 }
 .gleo-data-table thead th {
-  padding: 11px 16px;
-  font-weight: 600;
-  font-size: 0.72rem;
+  padding: 14px 18px;
+  font-weight: 700;
+  font-size: 0.8rem;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--gc-muted);
+  letter-spacing: 0.05em;
+  color: var(--gc-text);
   background: var(--gc-surface);
-  border-bottom: 1px solid var(--gc-border);
-  white-space: nowrap;
+  border-bottom: 2px solid var(--gc-border);
+  white-space: normal;
+  line-height: 1.35;
+  vertical-align: top;
 }
 .gleo-data-table tbody td {
-  padding: 13px 16px;
-  font-size: 0.92rem;
-  line-height: 1.55;
+  padding: 16px 18px;
+  font-size: 0.95rem;
+  line-height: 1.6;
   color: var(--gc-text);
   border-bottom: 1px solid var(--gc-border-soft);
   vertical-align: top;
 }
+.gleo-data-table tbody tr { min-height: 3.25rem; }
 .gleo-data-table tbody tr:last-child td { border-bottom: none; }
 .gleo-data-table tbody tr:hover td { background: var(--gc-hover); }
 
@@ -470,6 +488,32 @@ main h2.wp-block-heading.gleo-section-heading,
   }
 }
 
+/* Column consistency for AI-generated feature blocks — roomier cards, less “thin strip” */
+.entry-content .wp-block-columns .wp-block-column > :where(div, section, article) {
+  border: 1px solid var(--gc-border);
+  border-radius: var(--gc-radius);
+  background: var(--gc-card);
+  padding: 20px 20px 22px;
+  min-height: 5.5rem;
+}
+.entry-content .wp-block-columns .wp-block-column > :where(div, section, article) > *:first-child { margin-top: 0; }
+.entry-content .wp-block-columns .wp-block-column > :where(div, section, article) > *:last-child { margin-bottom: 0; }
+.entry-content .wp-block-columns .wp-block-column [style*="height"],
+.entry-content .wp-block-columns .wp-block-column [style*="min-height"] {
+  height: auto !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+.entry-content .wp-block-columns .wp-block-column h2,
+.entry-content .wp-block-columns .wp-block-column h3 {
+  font-size: clamp(1.02rem, 0.95rem + 0.35vw, 1.28rem);
+  line-height: 1.28;
+  margin-bottom: 0.55em;
+}
+.entry-content .wp-block-columns.is-layout-flex {
+  gap: 1.25rem 1.5rem !important;
+}
+
 /* ── Stats / figures callout (card aligned with FAQ & tables) ──────────── */
 .gleo-stats-callout {
   position: relative;
@@ -493,6 +537,75 @@ main h2.wp-block-heading.gleo-section-heading,
 
 @media (max-width: 360px) {
   .gleo-stats-callout { padding: 16px 16px; }
+}
+
+/* Opening summary (inverted pyramid + key takeaways) */
+.gleo-opening-summary-wrap {
+  margin: 1.75em 0 2em;
+  padding: 18px 20px 20px;
+  border-radius: var(--gc-radius);
+  border: 1px solid var(--gc-border);
+  background: var(--gc-surface);
+  box-shadow: var(--gc-shadow);
+}
+.gleo-direct-answer {
+  margin: 0 0 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--gc-border-soft);
+}
+.gleo-direct-answer p {
+  margin: 0;
+  font-size: clamp(0.98rem, 0.92rem + 0.25vw, 1.08rem);
+  line-height: 1.65;
+  color: var(--gc-text);
+}
+.gleo-lead-label {
+  display: inline-block;
+  font-weight: 800;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gc-accent);
+  margin-right: 0.35em;
+}
+.gleo-key-takeaways-title {
+  margin: 0 0 10px;
+  font-size: clamp(1rem, 0.92rem + 0.35vw, 1.2rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--gc-text);
+}
+.gleo-key-takeaways-list {
+  margin: 0;
+  padding-left: 1.15em;
+  color: var(--gc-text);
+  line-height: 1.55;
+}
+.gleo-key-takeaways-list li { margin: 0.35em 0; }
+
+/* Expert quote */
+.gleo-expert-quote {
+  margin: 1.75em 0;
+  padding: 16px 18px 14px;
+  border-radius: var(--gc-radius);
+  border: 1px solid var(--gc-border);
+  background: var(--gc-card);
+  box-shadow: var(--gc-shadow);
+}
+.gleo-expert-quote__text {
+  margin: 0;
+  font-size: clamp(0.98rem, 0.92rem + 0.2vw, 1.05rem);
+  line-height: 1.6;
+  color: var(--gc-text);
+}
+.gleo-expert-quote__text p { margin: 0; }
+.gleo-expert-quote__cite {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gc-muted);
 }
 </style>
 <script>
@@ -869,15 +982,15 @@ main h2.wp-block-heading.gleo-section-heading,
 	}
 
 	/**
-	 * Curated H2 templates for reader-facing articles (one %s = short topic). No corporate jargon.
+	 * H2 templates for mid-article structure (one %s = short topic). Appendix/meta phrasing excluded.
 	 *
 	 * @return string[]
 	 */
-	private function gleo_section_heading_template_pool() {
+	private function gleo_section_heading_body_pool() {
 		return array(
 			'Background on %s',
 			'A closer look at %s',
-			'Why %s matters',
+			'How %s works',
 			'What to know about %s',
 			'Key facts about %s',
 			'The basics of %s',
@@ -885,10 +998,9 @@ main h2.wp-block-heading.gleo-section-heading,
 			'Common questions about %s',
 			'How %s works in practice',
 			'Real-world examples of %s',
-			'Benefits of %s',
-			'Drawbacks of %s',
-			'When to choose %s',
-			'When to avoid %s',
+			'Benefits and limits of %s',
+			'Where %s helps most',
+			'Where %s may not fit',
 			'Who %s is for',
 			'How much %s costs',
 			'How long %s takes',
@@ -909,68 +1021,71 @@ main h2.wp-block-heading.gleo-section-heading,
 			'Industry context for %s',
 			'Expert perspective on %s',
 			'Customer stories about %s',
-			'Case study: %s',
+			'Example: %s in practice',
 			'Data behind %s',
 			'Research on %s',
 			'Safety notes on %s',
-			'Legal notes on %s',
-			'Privacy and %s',
-			'Security and %s',
 			'Accessibility and %s',
 			'Performance and %s',
 			'Maintenance for %s',
-			'Troubleshooting %s',
-			'FAQ follow-ups on %s',
 			'Glossary: %s',
-			'Summary of %s',
-			'Recap: %s',
-			'Next steps with %s',
-			'Wrapping up %s',
-			'Editor’s notes on %s',
-			'Behind the scenes of %s',
-			'How we tested %s',
-			'How we chose %s',
-			'Updates on %s',
-			'Changelog for %s',
-			'Version notes on %s',
-			'Regional differences in %s',
-			'Seasonal notes on %s',
-			'For beginners: %s',
-			'For advanced readers: %s',
-			'Shortcuts for %s',
-			'Workarounds for %s',
-			'Alternatives to %s',
-			'Complements to %s',
-			'Pairing %s with other ideas',
 			'Expanding on %s',
 			'Narrowing down %s',
 			'Putting %s in context',
 			'Breaking down %s',
 			'Building up %s',
 			'Connecting %s to your goals',
-			'From the archives: %s',
-			'Reader mail about %s',
 		);
 	}
 
 	/**
-	 * Up to four section titles derived from the post (replaces hard-coded generic labels).
+	 * Normalize generated HTML so it reads naturally inside existing post layouts.
 	 *
-	 * @param WP_Post $post Post object.
+	 * @param string $html Raw generated HTML fragment.
+	 * @return string
+	 */
+	private function normalize_contextual_fragment( $html ) {
+		if ( ! is_string( $html ) || '' === trim( $html ) ) {
+			return '';
+		}
+		$normalized = $html;
+		// Avoid oversized tertiary headings in columns/cards.
+		$normalized = preg_replace( '/<h2([^>]*)>/i', '<h3$1>', $normalized );
+		$normalized = preg_replace( '/<\/h2>/i', '</h3>', $normalized );
+		// Strip fixed-height declarations that clip text.
+		$normalized = preg_replace_callback(
+			'/\sstyle=(["\'])(.*?)\1/i',
+			static function( $m ) {
+				$style = preg_replace( '/\b(?:min-|max-)?height\s*:[^;]+;?/i', '', $m[2] );
+				$style = preg_replace( '/\boverflow\s*:\s*hidden\s*;?/i', '', $style );
+				$style = trim( preg_replace( '/\s{2,}/', ' ', $style ) );
+				return '' === $style ? '' : ' style="' . esc_attr( $style ) . '"';
+			},
+			$normalized
+		);
+		return $normalized;
+	}
+
+	/**
+	 * Section titles for mid-article structure (body pool only; count scales with post length).
+	 *
+	 * @param WP_Post $post       Post object.
+	 * @param int     $max_slots How many headings may be inserted (1–4).
 	 * @return string[]
 	 */
-	private function gleo_section_heading_labels_for_post( $post ) {
-		$t    = $this->gleo_short_topic_label( $post );
-		$pool = $this->gleo_section_heading_template_pool();
-		$n    = count( $pool );
-		if ( $n < 4 ) {
-			return array_fill( 0, 4, $t );
+	private function gleo_section_heading_labels_for_post( $post, $max_slots = 4 ) {
+		$t          = $this->gleo_short_topic_label( $post );
+		$pool       = $this->gleo_section_heading_body_pool();
+		$n          = count( $pool );
+		$max_slots  = max( 1, min( 4, (int) $max_slots ) );
+		if ( $n < $max_slots ) {
+			return array_fill( 0, $max_slots, $t );
 		}
 		$seed = (int) crc32( (string) $post->ID . "\x1f" . (string) ( $post->post_modified_gmt ? $post->post_modified_gmt : $post->post_modified ) );
 		$idxs = array();
 		$step = max( 1, ( $seed % 11 ) + 3 );
 		$c    = $seed % $n;
-		for ( $i = 0; $i < 4; $i++ ) {
+		for ( $i = 0; $i < $max_slots; $i++ ) {
 			$guard = 0;
 			while ( in_array( $c, $idxs, true ) && $guard < $n ) {
 				$c = ( $c + 1 ) % $n;
@@ -984,6 +1099,288 @@ main h2.wp-block-heading.gleo-section-heading,
 			$out[] = sprintf( $pool[ $ix ], $t );
 		}
 		return $out;
+	}
+
+	/**
+	 * Append Allow rules for common AI crawlers when the site owner enables it via Gleo.
+	 *
+	 * @param string $output Robots.txt output.
+	 * @param bool   $public Whether the site is discouraging search engines.
+	 * @return string
+	 */
+	public function append_ai_crawler_allows_to_robots_txt( $output, $public ) {
+		if ( ! get_option( 'gleo_robots_allow_ai_crawlers', false ) ) {
+			return $output;
+		}
+		if ( ! $public ) {
+			return $output;
+		}
+		$lines   = array( '', '# Gleo — explicit Allow rules for common AI crawlers (does not remove your existing rules).' );
+		$agents  = array( 'GPTBot', 'ChatGPT-User', 'CCBot', 'Google-Extended', 'anthropic-ai', 'ClaudeBot', 'Claude-Web', 'Omgilibot', 'PerplexityBot', 'Bytespider' );
+		foreach ( $agents as $ua ) {
+			$lines[] = 'User-agent: ' . $ua;
+			$lines[] = 'Allow: /';
+			$lines[] = '';
+		}
+		return $output . implode( "\n", $lines );
+	}
+
+	/**
+	 * Remove Gleo opening summary HTML block (idempotent re-apply).
+	 *
+	 * @param string $content Post content.
+	 * @return string
+	 */
+	private function gleo_strip_opening_summary_block( $content ) {
+		return preg_replace(
+			'/\n?<!--\s*wp:html\s*-->\s*<div class="gleo-opening-summary-wrap"[^>]*>[\s\S]*?<!--\s*gleo:opening-summary:end\s*-->\s*<!--\s*\/wp:html\s*-->\s*/iu',
+			'',
+			$content
+		);
+	}
+
+	/**
+	 * Remove Gleo expert quote figure (idempotent).
+	 *
+	 * @param string $content Post content.
+	 * @return string
+	 */
+	private function gleo_strip_expert_quote_block( $content ) {
+		return preg_replace(
+			'/\n?<!--\s*wp:html\s*-->\s*<figure class="gleo-expert-quote"[^>]*>[\s\S]*?<\/figure>\s*<!--\s*\/wp:html\s*-->\s*/iu',
+			'',
+			$content
+		);
+	}
+
+	/**
+	 * Plain-language excerpt from post body for opening blocks.
+	 *
+	 * @param WP_Post $post Post.
+	 * @return string
+	 */
+	private function gleo_plain_body_excerpt( WP_Post $post ) {
+		$plain = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $post->post_content ) ) );
+		if ( strlen( $plain ) > 2400 ) {
+			$plain = substr( $plain, 0, 2400 );
+		}
+		return $plain;
+	}
+
+	/**
+	 * Build 60–100 word "in brief" lead from contextual depth or post text.
+	 *
+	 * @param WP_Post $post Post.
+	 * @param array|null $contextual_assets Scan contextual assets.
+	 * @return string Plain text (already safe for esc_html).
+	 */
+	private function gleo_opening_in_brief_text( WP_Post $post, $contextual_assets ) {
+		$candidate = '';
+		if ( is_array( $contextual_assets ) && ! empty( $contextual_assets['depth_html'] ) ) {
+			$candidate = wp_strip_all_tags( $contextual_assets['depth_html'] );
+		}
+		if ( $candidate === '' ) {
+			$candidate = $this->gleo_plain_body_excerpt( $post );
+		}
+		$words = preg_split( '/\s+/u', trim( $candidate ), -1, PREG_SPLIT_NO_EMPTY );
+		if ( empty( $words ) ) {
+			return sprintf( 'This article explains %s in practical terms you can use right away.', wp_strip_all_tags( $post->post_title ) );
+		}
+		$slice = array_slice( $words, 0, min( 100, count( $words ) ) );
+		$text  = implode( ' ', $slice );
+		$wc    = count( $slice );
+		if ( $wc < 50 && count( $words ) > $wc ) {
+			$slice = array_slice( $words, 0, min( 80, count( $words ) ) );
+			$text  = implode( ' ', $slice );
+		}
+		return $text;
+	}
+
+	/**
+	 * Key takeaway bullets (no external labels like "TL;DR").
+	 *
+	 * @param WP_Post    $post Post.
+	 * @param array|null $contextual_assets Assets.
+	 * @return string[] Plain sentences.
+	 */
+	private function gleo_key_takeaway_strings( WP_Post $post, $contextual_assets ) {
+		$base = $this->gleo_plain_body_excerpt( $post );
+		if ( is_array( $contextual_assets ) && ! empty( $contextual_assets['authority_html'] ) ) {
+			$base .= ' ' . wp_strip_all_tags( $contextual_assets['authority_html'] );
+		}
+		$sentences = preg_split( '/(?<=[.!?])\s+/u', trim( $base ), -1, PREG_SPLIT_NO_EMPTY );
+		$out       = array();
+		foreach ( $sentences as $s ) {
+			$s = trim( $s );
+			if ( strlen( $s ) < 42 ) {
+				continue;
+			}
+			$out[] = $s;
+			if ( count( $out ) >= 4 ) {
+				break;
+			}
+		}
+		if ( count( $out ) < 3 ) {
+			$t = wp_strip_all_tags( $post->post_title );
+			$out = array(
+				sprintf( 'Clarifies who %s is for and what problem it solves.', $t ),
+				sprintf( 'Outlines practical considerations before you choose %s.', $t ),
+				sprintf( 'Points to the sections below for specifics and next steps.', $t ),
+			);
+		}
+		return $out;
+	}
+
+	/**
+	 * Full HTML block: inverted-pyramid lead + key takeaways.
+	 *
+	 * @param WP_Post    $post Post.
+	 * @param array|null $contextual_assets Assets.
+	 * @return string Block markup.
+	 */
+	private function gleo_build_opening_summary_block( WP_Post $post, $contextual_assets ) {
+		$brief_raw = $this->gleo_opening_in_brief_text( $post, $contextual_assets );
+		$bullets   = $this->gleo_key_takeaway_strings( $post, $contextual_assets );
+		$lis       = '';
+		foreach ( $bullets as $b ) {
+			$lis .= '<li>' . esc_html( $b ) . '</li>';
+		}
+		$inner  = '<div class="gleo-opening-summary-wrap">';
+		$inner .= '<div class="gleo-direct-answer"><p><span class="gleo-lead-label">' . esc_html__( 'In brief', 'gleo' ) . '</span> ' . esc_html( $brief_raw ) . '</p></div>';
+		$inner .= '<div class="gleo-key-takeaways"><h3 class="gleo-key-takeaways-title">' . esc_html__( 'Key takeaways', 'gleo' ) . '</h3><ul class="gleo-key-takeaways-list">' . $lis . '</ul></div>';
+		$inner .= '</div><!-- gleo:opening-summary:end -->';
+		return "<!-- wp:html -->\n" . $inner . "\n<!-- /wp:html -->";
+	}
+
+	/**
+	 * Improve empty or missing image alt text in core Image blocks and attachment meta.
+	 *
+	 * @param string  $content Post content.
+	 * @param WP_Post $post Post.
+	 * @return array{0:string,1:bool} Updated content and whether it changed.
+	 */
+	private function gleo_apply_image_alt_fixes( $content, WP_Post $post ) {
+		$topic   = wp_strip_all_tags( $post->post_title );
+		$changed = false;
+		$out     = preg_replace_callback(
+			'/<!--\s*wp:image\s+(\{[\s\S]*?\})\s*\/-->/u',
+			function ( $m ) use ( $post, $topic, &$changed ) {
+				$json = json_decode( $m[1], true );
+				if ( ! is_array( $json ) ) {
+					return $m[0];
+				}
+				$alt = isset( $json['alt'] ) ? (string) $json['alt'] : '';
+				$id  = isset( $json['id'] ) ? (int) $json['id'] : 0;
+				if ( $id > 0 ) {
+					$stored = (string) get_post_meta( $id, '_wp_attachment_image_alt', true );
+					if ( $stored !== '' ) {
+						$alt = $stored;
+					}
+				}
+				$alt_trim = trim( $alt );
+				if ( $alt_trim !== '' && strlen( $alt_trim ) >= 8 ) {
+					return $m[0];
+				}
+				$new_alt = sprintf(
+					/* translators: %s: post title context for image alt text */
+					__( 'Image supporting: %s', 'gleo' ),
+					$topic
+				);
+				if ( $id > 0 ) {
+					update_post_meta( $id, '_wp_attachment_image_alt', $new_alt );
+				}
+				$json['alt'] = $new_alt;
+				$changed     = true;
+				return '<!-- wp:image ' . wp_json_encode( $json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) . ' /-->';
+			},
+			$content
+		);
+		return array( $out, $changed );
+	}
+
+	/**
+	 * Merge Organization + publisher wiring into stored scan JSON-LD.
+	 *
+	 * @param int     $post_id Post ID.
+	 * @param WP_Post $post Post object.
+	 * @return void
+	 */
+	private function gleo_enrich_scan_json_ld( $post_id, WP_Post $post ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'gleo_scans';
+		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT scan_result FROM {$table} WHERE post_id = %d AND scan_status = 'completed' LIMIT 1", $post_id ) );
+		if ( ! $row || ! $row->scan_result ) {
+			return;
+		}
+		$data = json_decode( $row->scan_result, true );
+		if ( ! is_array( $data ) ) {
+			return;
+		}
+		if ( empty( $data['json_ld_schema'] ) || ! is_array( $data['json_ld_schema'] ) ) {
+			$data['json_ld_schema'] = array(
+				'@context' => 'https://schema.org',
+				'@type'    => 'Article',
+				'headline' => wp_strip_all_tags( $post->post_title ),
+			);
+		}
+		$schema = $data['json_ld_schema'];
+		$graph  = array();
+		if ( isset( $schema['@graph'] ) && is_array( $schema['@graph'] ) ) {
+			$graph = $schema['@graph'];
+		} elseif ( isset( $schema['@type'] ) ) {
+			$graph[] = $schema;
+		} else {
+			return;
+		}
+		$site_name = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+		$site_url  = home_url( '/' );
+		$org_id    = trailingslashit( $site_url ) . '#gleo-organization';
+		$has_org   = false;
+		foreach ( $graph as $node ) {
+			if ( empty( $node['@type'] ) ) {
+				continue;
+			}
+			$types = is_array( $node['@type'] ) ? $node['@type'] : array( $node['@type'] );
+			if ( in_array( 'Organization', $types, true ) ) {
+				$has_org = true;
+				break;
+			}
+		}
+		if ( ! $has_org ) {
+			$graph[] = array(
+				'@type' => 'Organization',
+				'@id'   => $org_id,
+				'name'  => $site_name,
+				'url'   => $site_url,
+			);
+		}
+		foreach ( $graph as &$node ) {
+			if ( empty( $node['@type'] ) ) {
+				continue;
+			}
+			$types = is_array( $node['@type'] ) ? $node['@type'] : array( $node['@type'] );
+			if ( in_array( 'Article', $types, true ) ) {
+				$node['publisher'] = array( '@id' => $org_id );
+				if ( empty( $node['mainEntityOfPage'] ) ) {
+					$node['mainEntityOfPage'] = array(
+						'@type' => 'WebPage',
+						'@id'   => get_permalink( $post_id ),
+					);
+				}
+			}
+		}
+		unset( $node );
+		$data['json_ld_schema'] = array(
+			'@context' => 'https://schema.org',
+			'@graph'   => $graph,
+		);
+		$wpdb->update(
+			$table,
+			array( 'scan_result' => wp_json_encode( $data ) ),
+			array( 'post_id' => $post_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
 	}
 
 	public function handle_apply( $request ) {
@@ -1026,9 +1423,56 @@ main h2.wp-block-heading.gleo-section-heading,
 			case 'schema':
 				if ( $enabled ) {
 					update_post_meta( $post_id, '_gleo_schema_override', 1 );
+					$this->gleo_enrich_scan_json_ld( $post_id, $post );
 				} else {
 					delete_post_meta( $post_id, '_gleo_schema_override' );
 				}
+				break;
+
+			case 'schema_enrich':
+				$this->gleo_enrich_scan_json_ld( $post_id, $post );
+				break;
+
+			case 'opening_summary':
+				$content  = $this->gleo_strip_opening_summary_block( $content );
+				$opening   = $this->gleo_build_opening_summary_block( $post, $contextual_assets );
+				$content   = $opening . "\n\n" . $content;
+				$modified  = true;
+				break;
+
+			case 'image_alt_text':
+				list( $content, $alt_changed ) = $this->gleo_apply_image_alt_fixes( $content, $post );
+				if ( $alt_changed ) {
+					$modified = true;
+				}
+				break;
+
+			case 'robots_txt_allow':
+				update_option( 'gleo_robots_allow_ai_crawlers', true, false );
+				break;
+
+			case 'expert_quotes':
+				$content = $this->gleo_strip_expert_quote_block( $content );
+				$quote    = '';
+				if ( is_array( $contextual_assets ) && ! empty( $contextual_assets['authority_html'] ) ) {
+					$quote = wp_strip_all_tags( $contextual_assets['authority_html'] );
+				}
+				if ( $quote === '' ) {
+					$quote = sprintf(
+						/* translators: %s: article topic */
+						__( 'For important decisions about %s, cross-check details with primary sources and your own requirements.', 'gleo' ),
+						wp_strip_all_tags( $post->post_title )
+					);
+				}
+				if ( strlen( $quote ) > 360 ) {
+					$quote = substr( $quote, 0, 357 ) . '…';
+				}
+				$fig  = '<figure class="gleo-expert-quote"><blockquote class="gleo-expert-quote__text"><p>' . esc_html( $quote ) . '</p></blockquote>';
+				$fig .= '<figcaption class="gleo-expert-quote__cite">' . esc_html__( 'Expert perspective', 'gleo' ) . '</figcaption></figure>';
+				$blk  = "<!-- wp:html -->\n{$fig}\n<!-- /wp:html -->";
+				$pos  = max( 2, (int) floor( (int) preg_match_all( '/<\/p>/i', $content ) / 3 ) );
+				$content = $this->inject_after_paragraph( $content, $blk, $pos );
+				$modified = true;
 				break;
 
 			case 'structure':
@@ -1046,40 +1490,69 @@ main h2.wp-block-heading.gleo-section-heading,
 					$content
 				);
 			}
-			// ── Insert up to 4 contextual section headings, every ~3 paragraphs ───────
+			// ── Insert contextual section headings (body-safe titles; spacing scales with length) ──
 			$p_total = (int) preg_match_all( '/<\/p>/i', $content );
-			$heading_labels  = $this->gleo_section_heading_labels_for_post( $post );
-			$max_headings    = count( $heading_labels );
-			$avoid_near      = array( 'testimonial', 'review', ' said ', 'recommend', 'loved', 'quote', 'rating', 'stars', '★', '5 star' );
-			$paragraphs      = preg_split( '/(<\/p>\s*)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
-			$new_content     = '';
-			$p_count         = 0;
-			$heading_num     = 0;
-			$last_p_text     = '';
+			if ( $p_total < 8 ) {
+				$max_headings = 1;
+			} elseif ( $p_total < 15 ) {
+				$max_headings = 2;
+			} elseif ( $p_total < 24 ) {
+				$max_headings = 3;
+			} else {
+				$max_headings = 4;
+			}
+			$heading_labels = $this->gleo_section_heading_labels_for_post( $post, $max_headings );
+			$avoid_near     = array( 'testimonial', 'review', ' said ', 'recommend', 'loved', 'quote', 'rating', 'stars', '★', '5 star', 'cookie', 'subscribe', 'newsletter' );
+			$insert_every   = (int) max( 4, ceil( $p_total / max( 1, $max_headings + 1 ) ) );
+			$paragraphs     = preg_split( '/(<\/p>\s*)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
+			$new_content    = '';
+			$p_count        = 0;
+			$heading_num    = 0;
+			$buffer         = '';
 			foreach ( $paragraphs as $part ) {
-				if ( preg_match( '/<\/p>/i', $part ) ) {
+				$closed_para = (bool) preg_match( '/<\/p>/i', $part );
+				if ( $closed_para ) {
+					$buffer         .= $part;
+					$chunk_for_scan  = $buffer;
+					$buffer          = '';
 					$p_count++;
-					$last_p_text = wp_strip_all_tags( $part );
+					$para_plain = trim( wp_strip_all_tags( $chunk_for_scan ) );
+				} else {
+					$buffer    .= $part;
+					$chunk_for_scan = '';
+					$para_plain     = '';
 				}
 				$new_content .= $part;
+				if ( ! $closed_para ) {
+					continue;
+				}
+				$near       = strtolower( $para_plain );
+				$listy      = ( stripos( $chunk_for_scan, '<!-- wp:list' ) !== false || stripos( $chunk_for_scan, '<ul' ) !== false || stripos( $chunk_for_scan, '<ol' ) !== false || stripos( $chunk_for_scan, '<li' ) !== false );
+				$short_para = ( str_word_count( $near ) < 28 );
+				$skip       = $listy || $short_para || '' === $para_plain;
+				if ( ! $skip ) {
+					foreach ( $avoid_near as $kw ) {
+						if ( strpos( $near, $kw ) !== false ) {
+							$skip = true;
+							break;
+						}
+					}
+				}
+				$at_interval = ( 0 === ( $p_count % $insert_every ) );
+				if ( $p_total < 6 ) {
+					$at_interval = ( $p_count === (int) max( 1, (int) floor( $p_total / 2 ) ) );
+				}
 				if (
+					$at_interval &&
 					$p_count > 0 &&
-					$p_count % 3 === 0 &&
 					$p_count < $p_total &&
 					$heading_num < $max_headings &&
-					! preg_match( '/<h[2-6]/i', $part )
+					! preg_match( '/<h[2-6]/i', $chunk_for_scan ) &&
+					! $skip
 				) {
-					// Skip if surrounding content looks like testimonials/reviews
-					$near = strtolower( $last_p_text );
-					$skip = false;
-					foreach ( $avoid_near as $kw ) {
-						if ( strpos( $near, $kw ) !== false ) { $skip = true; break; }
-					}
-					if ( ! $skip ) {
-						$section_label = esc_html( $heading_labels[ $heading_num ] );
-						$new_content  .= "\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading gleo-section-heading\">{$section_label}</h2>\n<!-- /wp:heading -->\n";
-						$heading_num++;
-					}
+					$section_label = esc_html( $heading_labels[ $heading_num ] );
+					$new_content  .= "\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading gleo-section-heading\">{$section_label}</h2>\n<!-- /wp:heading -->\n";
+					$heading_num++;
 				}
 			}
 			$content  = $new_content;
@@ -1227,7 +1700,7 @@ main h2.wp-block-heading.gleo-section-heading,
 				if ( ! empty( $contextual_assets['authority_html'] ) ) {
 					$stats_text = wp_strip_all_tags( $contextual_assets['authority_html'] );
 				} else {
-					$stats_text = is_string( $user_input ) && !empty( $user_input ) ? sanitize_textarea_field( $user_input ) : 'Recent industry analyses show that deploying these advanced methods can lead to up to a 60% boost in core engagement metrics and long-term retention.';
+					$stats_text = is_string( $user_input ) && !empty( $user_input ) ? sanitize_textarea_field( $user_input ) : 'Include one or two sourced figures that are directly relevant to this post topic.';
 				}
 				$callout_inner = '<aside class="gleo-stats-callout" role="note">'
 					. '<div class="gleo-stats-inner">'
@@ -1258,12 +1731,17 @@ main h2.wp-block-heading.gleo-section-heading,
 
 			case 'content_depth':
 				if ( ! empty( $contextual_assets['depth_html'] ) ) {
-					$content = $this->inject_after_paragraph( $content, wp_kses_post( $contextual_assets['depth_html'] ), 3 );
+					$depth_html = $this->normalize_contextual_fragment( $contextual_assets['depth_html'] );
+					$content = $this->inject_after_paragraph( $content, wp_kses_post( $depth_html ), 3 );
 				} else {
 					$topic      = esc_html( $post->post_title );
 					$expansion  = "\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading\">A Closer Look: {$topic}</h2>\n<!-- /wp:heading -->\n";
-					$expansion .= "<!-- wp:paragraph -->\n<p>Understanding {$topic} requires looking at the broader context. Industry experts consistently emphasize the importance of comprehensive coverage when addressing this subject.</p>\n<!-- /wp:paragraph -->\n";
-					$expansion .= "<!-- wp:paragraph -->\n<p>Staying current with the latest developments in this area is crucial. As new research and data emerge, best practices continue to evolve.</p>\n<!-- /wp:paragraph -->\n";
+					$clean = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $post->post_content ) ) );
+					$sentences = preg_split( '/(?<=[.!?])\s+/', $clean, -1, PREG_SPLIT_NO_EMPTY );
+					$fallback_one = ! empty( $sentences[0] ) ? $sentences[0] : sprintf( '%s is best understood by looking at the specific details in this article.', $topic );
+					$fallback_two = ! empty( $sentences[1] ) ? $sentences[1] : sprintf( 'Use the points above as context for evaluating %s in your own situation.', $topic );
+					$expansion .= "<!-- wp:paragraph -->\n<p>" . esc_html( $fallback_one ) . "</p>\n<!-- /wp:paragraph -->\n";
+					$expansion .= "<!-- wp:paragraph -->\n<p>" . esc_html( $fallback_two ) . "</p>\n<!-- /wp:paragraph -->\n";
 					$content = $this->inject_after_paragraph( $content, $expansion, 3 );
 				}
 				$modified = true;
@@ -1290,13 +1768,29 @@ main h2.wp-block-heading.gleo-section-heading,
 			}
 			$cs = &$result_data['content_signals'];
 			switch ( $type ) {
-				case 'schema': $cs['has_schema'] = true; break;
+				case 'schema':
+					$cs['has_schema'] = true;
+					$cs['has_org_schema'] = true;
+					break;
+				case 'schema_enrich':
+					$cs['has_org_schema'] = true;
+					break;
 				case 'structure': $cs['has_headings'] = true; $cs['heading_count'] = max($cs['heading_count'] ?? 0, 6); break;
 				case 'formatting': $cs['has_lists'] = true; $cs['list_item_count'] = max($cs['list_item_count'] ?? 0, 12); break;
 				case 'faq': $cs['has_faq'] = true; break;
 				case 'credibility': $cs['has_citations'] = true; $cs['citation_count'] = max($cs['citation_count'] ?? 0, 5); break;
 				case 'authority': $cs['stat_count'] = max($cs['stat_count'] ?? 0, 3); break;
 				case 'answer_readiness': $cs['has_direct_answers'] = true; break;
+				case 'opening_summary':
+					$cs['has_direct_answer'] = true;
+					$cs['has_tldr']         = true;
+					break;
+				case 'image_alt_text':
+					$cs['alt_text_coverage'] = max( (int) ( $cs['alt_text_coverage'] ?? 0 ), 95 );
+					break;
+				case 'expert_quotes':
+					$cs['has_quotes'] = true;
+					break;
 			}
 			$wpdb->update(
 				$table_name,

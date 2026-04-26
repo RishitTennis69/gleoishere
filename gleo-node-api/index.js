@@ -8,7 +8,7 @@ const analyticsRoutes = require('./routes/analytics');
 const { initSOVCron } = require('./lib/sov-simulator');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8765;
 
 // CORS allow-list (use ALLOWED_ORIGINS env, comma-separated). Defaults are dev-friendly.
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')

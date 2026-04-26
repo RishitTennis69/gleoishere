@@ -8,7 +8,7 @@ class Gleo_API_Client {
 	private $api_base_url;
 
 	public function __construct() {
-		$base = defined( 'GLEO_NODE_API_URL' ) ? GLEO_NODE_API_URL : 'http://localhost:3000';
+		$base = defined( 'GLEO_NODE_API_URL' ) ? GLEO_NODE_API_URL : 'http://localhost:8765';
 		$this->api_base_url = untrailingslashit( apply_filters( 'gleo_node_api_url', $base ) );
 	}
 

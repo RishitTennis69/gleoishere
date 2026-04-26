@@ -16,8 +16,9 @@ const gleoSupabase =
 
 // ── Fix config ──────────────────────────────────────────────────────────────
 const FIX_CONFIG = {
-    schema:           { label: 'Deploy Schema',         needsInput: false, successMsg: 'JSON-LD schema markup is now active on this post.' },
-    structure:        { label: 'Add Headings',          needsInput: false, successMsg: 'Semantic H2 headings have been inserted every ~3 paragraphs.' },
+    schema:           { label: 'Deploy Schema',         needsInput: false, successMsg: 'JSON-LD schema markup is now active on this post, with expanded Organization wiring in your stored scan data.' },
+    schema_enrich:    { label: 'Enrich structured data', needsInput: false, successMsg: 'Organization and publisher details were merged into your Gleo JSON-LD for this post.' },
+    structure:        { label: 'Add Headings',          needsInput: false, successMsg: 'Semantic H2 headings have been added at natural break points in the article.' },
     formatting:       { label: 'Add Lists',             needsInput: false, successMsg: 'Dense paragraphs have been converted into bulleted lists.' },
     readability:      { label: 'Shorten Paragraphs',    needsInput: false, successMsg: 'Long paragraphs (80+ words) have been split into shorter chunks.' },
     content_depth:    { label: 'Expand Content',        needsInput: false, successMsg: 'In-depth paragraphs have been added to strengthen content quality.' },
@@ -25,6 +26,10 @@ const FIX_CONFIG = {
     faq:              { label: 'Add FAQ Block',         needsInput: false, successMsg: 'A contextual FAQ section (including Q&A) has been added to your post.' },
     authority:        { label: 'Add Statistics',        needsInput: false, successMsg: 'A statistics callout with relevant data points has been added.' },
     credibility:      { label: 'Add Sources',           needsInput: true,  prompt: 'Paste URLs to authoritative sources (one per line):', inputType: 'lines', successMsg: 'A Sources & References section has been added to your post.' },
+    opening_summary:  { label: 'Add opening summary',   needsInput: false, successMsg: 'An opening “In brief” lead and Key takeaways block were added at the top of the post.' },
+    image_alt_text:   { label: 'Improve image alt text', needsInput: false, successMsg: 'Missing or empty image descriptions were filled using your post title (and saved on the attachments where possible).' },
+    robots_txt_allow: { label: 'Allow AI crawlers (robots.txt)', needsInput: false, successMsg: 'Your site robots.txt now includes explicit Allow rules for common AI crawlers (site-wide).' },
+    expert_quotes:    { label: 'Add expert perspective', needsInput: false, successMsg: 'A short expert-perspective quote block was added to the article.' },
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -175,7 +180,7 @@ const AnalyticsTab = () => {
 			return '';
 		}
 	}, [] );
-	const nodeBase = useMemo( () => ( typeof gleoData !== 'undefined' && gleoData.nodeApiUrl ) ? gleoData.nodeApiUrl : 'http://localhost:3000', [] );
+	const nodeBase = useMemo( () => ( typeof gleoData !== 'undefined' && gleoData.nodeApiUrl ) ? gleoData.nodeApiUrl : 'http://localhost:8765', [] );
 
 	const handleRefreshSov = () => {
 		setIsRefreshing( true ); setRefreshMsg( null ); setApiOffline( false );
@@ -440,8 +445,10 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
     const [ iframeKey, setIframeKey ] = useState( Date.now() );
     const [ iframeLoaded, setIframeLoaded ] = useState( false );
     const iframeRef = useRef( null );
+    const prevAllApplied = useRef( allApplied );
     const [ tourState, setTourState ] = useState( { active: false, step: 0, elements: [] } );
     const [ showTourPrompt, setShowTourPrompt ] = useState( false );
+    const [ tourReplayUnlocked, setTourReplayUnlocked ] = useState( false );
 
     const iframeSrc = ( () => {
         let baseUrl = url || '';
@@ -458,6 +465,24 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
             setIframeLoaded( false );
         }
     }, [ applyingAll, allApplied ] );
+
+    useEffect( () => {
+        if ( allApplied && prevAllApplied.current === false ) {
+            setTourReplayUnlocked( false );
+            setShowTourPrompt( false );
+        }
+        prevAllApplied.current = allApplied;
+    }, [ allApplied ] );
+
+    const finishTourSession = () => {
+        const doc = iframeRef.current?.contentDocument;
+        if ( doc ) {
+            doc.querySelectorAll( '.gleo-dimmed' ).forEach( e => e.classList.remove( 'gleo-dimmed' ) );
+            doc.querySelectorAll( '.gleo-highlight' ).forEach( e => e.classList.remove( 'gleo-highlight' ) );
+        }
+        setTourState( { active: false, step: 0, elements: [] } );
+        setTourReplayUnlocked( true );
+    };
 
     // Auto-scroll to first Gleo block when iframe loads after fixes applied
     useEffect( () => {
@@ -481,6 +506,7 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
 
     const startTour = () => {
         setShowTourPrompt( false );
+        setTourReplayUnlocked( false );
         const doc = iframeRef.current?.contentDocument;
         if ( ! doc ) {
             return;
@@ -603,7 +629,9 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
                         <div style={ { display: 'flex', alignItems: 'center', gap: 8 } }>
                             <span style={ { fontSize: 16 } }>✅</span>
                             <span style={ { color: '#4ade80', fontWeight: 700, fontSize: 14 } }>All auto-fixes active</span>
-                            <button type="button" className="gleo-btn gleo-preview-chrome-btn" onClick={ startTour } style={ { marginLeft: 12, padding: '6px 14px', fontSize: 12, borderRadius: 8 } }>Restart AI Tour</button>
+                            { tourReplayUnlocked && ! tourState.active ? (
+                                <button type="button" className="gleo-btn gleo-preview-chrome-btn" onClick={ startTour } style={ { marginLeft: 12, padding: '6px 14px', fontSize: 12, borderRadius: 8 } }>Restart AI Tour</button>
+                            ) : null }
                         </div>
                     ) }
                 </div>
@@ -612,22 +640,23 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
                     onClick={ () => { stopTour(); onClose(); } }>Exit preview</button>
             </div>
 
-            <div className="gleo-preview-body" style={ { display: 'flex', flexDirection: 'column', flex: 1, padding: 0, margin: 0, overflow: 'hidden', position: 'relative', background: '#f1f5f9' } }>
+            <div className="gleo-preview-body gleo-preview-body--flex" style={ { flexDirection: 'column', padding: 0, margin: 0, position: 'relative', background: '#f1f5f9' } }>
                 { ( applyingAll || ( ! iframeLoaded && allApplied ) ) && (
                     <div className="gleo-preview-loading" style={ { position: 'absolute', inset: 0, zIndex: 10, background: 'rgba(15,23,42,0.7)', backdropFilter: 'blur(10px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' } }>
                         <div className="gleo-spinner" style={ { marginBottom: 20, width: 40, height: 40, borderTopColor: '#3b82f6' } }></div>
                         <p style={ { color: '#fff', fontSize: 16, fontWeight: 600 } }>{ applyingAll ? 'Syncing AI optimizations…' : 'Finalizing preview…' }</p>
                     </div>
                 ) }
-                <iframe ref={ iframeRef } key={ iframeKey } src={ iframeSrc }
-                    onLoad={ () => setIframeLoaded( true ) }
-                    loading="eager"
-                    style={ { width: '100%', height: '100%', border: 'none', background: '#fff', transition: 'opacity 0.5s ease' } }
-                    title="Site Preview"/>
+                <div className="gleo-preview-iframe-shell">
+                    <iframe ref={ iframeRef } className="gleo-preview-iframe" key={ iframeKey } src={ iframeSrc }
+                        onLoad={ () => setIframeLoaded( true ) }
+                        loading="eager"
+                        title="Site Preview"/>
+                </div>
 
                 { showTourPrompt && ! tourState.active && (
                     <div style={ { position: 'absolute', top: 30, right: 30, background: '#ffffff', padding: '24px', borderRadius: 20, width: 340, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)', zIndex: 100, border: '1px solid #e2e8f0' } }>
-                        <button type="button" onClick={ () => setShowTourPrompt( false ) } style={ { position: 'absolute', top: 12, right: 16, background: 'transparent', border: 'none', color: '#94a3b8', fontSize: 20, cursor: 'pointer' } }>×</button>
+                        <button type="button" onClick={ () => { setShowTourPrompt( false ); setTourReplayUnlocked( true ); } } style={ { position: 'absolute', top: 12, right: 16, background: 'transparent', border: 'none', color: '#94a3b8', fontSize: 20, cursor: 'pointer' } }>×</button>
                         <div style={ { width: 44, height: 44, background: 'var(--gleo-accent-bg)', color: 'var(--gleo-accent)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, marginBottom: 16 } }>✨</div>
                         <h4 style={ { margin: '0 0 8px', fontSize: 18, color: '#0f172a', fontWeight: 800 } }>AI Changes Applied</h4>
                         <p style={ { color: '#64748b', fontSize: 14, margin: '0 0 20px', lineHeight: 1.5 } }>Walk through where new GEO blocks were added.</p>
@@ -660,7 +689,7 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
                                     Issue { tourState.step + 1 } of { tourState.elements.length }
                                 </span>
                             </div>
-                            <button type="button" onClick={ stopTour } style={ { background: 'transparent', border: 'none', color: '#64748b', fontSize: 24, cursor: 'pointer', padding: 0 } }>&times;</button>
+                            <button type="button" onClick={ finishTourSession } style={ { background: 'transparent', border: 'none', color: '#64748b', fontSize: 24, cursor: 'pointer', padding: 0 } }>&times;</button>
                         </div>
                         <h3 className="gleo-tour-step-title" style={ { color: '#fff', margin: '0 0 10px', fontSize: 20, fontWeight: 800, letterSpacing: '-0.02em' } }>{ tourState.elements[ tourState.step ].title }</h3>
                         { tourState.elements[ tourState.step ].text ? (
@@ -690,7 +719,7 @@ const SitePreview = ( { url, onClose, onApplyAll, applyingAll, allApplied } ) =>
                                     Next →
                                 </button>
                             ) : (
-                                <button type="button" className="gleo-btn gleo-btn-primary" onClick={ stopTour } style={ { padding: '10px 24px', borderRadius: 12, background: '#3b82f6', border: 'none' } }>
+                                <button type="button" className="gleo-btn gleo-btn-primary" onClick={ finishTourSession } style={ { padding: '10px 24px', borderRadius: 12, background: '#3b82f6', border: 'none' } }>
                                     Done
                                 </button>
                             ) }
@@ -724,6 +753,19 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
     const addToast    = msg => { const id = Date.now(); setToasts(p => [...p, { id, message: msg }]); };
     const removeToast = id  => setToasts(p => p.filter(t => t.id !== id));
 
+    const collectAutoFixTypesForItem = ( item ) => {
+        const types = [];
+        if ( item.fixType && FIX_CONFIG[ item.fixType ] && ! FIX_CONFIG[ item.fixType ].needsInput ) {
+            types.push( item.fixType );
+        }
+        ( item.extraFixes || [] ).forEach( ft => {
+            if ( FIX_CONFIG[ ft ] && ! FIX_CONFIG[ ft ].needsInput ) {
+                types.push( ft );
+            }
+        } );
+        return types;
+    };
+
     const buildItems = () => {
         const items = [];
         const cs = result.content_signals || {};
@@ -739,7 +781,17 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
             if (cs.image_count > 0 && cs.alt_text_coverage < 90) issues.push(`${cs.alt_text_coverage}% alt text coverage (aim for 90%+)`);
             if (!cs.has_llms_txt) issues.push('Re-scan to verify /llms.txt in HTML (Gleo serves it and adds a head link)');
             const msg = score === 15 ? 'All technical crawlability checks pass. AI bots can fully access your content.' : issues.join('. ') + '.';
-            items.push({ priority: score === 15 ? 'positive' : score <= 5 ? 'critical' : 'medium', area: 'Technical Crawlability', maxScore: 15, score, message: msg, fixType: null, emoji: '🔍' });
+            const techAuto = [];
+            if (cs.image_count > 0 && cs.alt_text_coverage < 90) techAuto.push('image_alt_text');
+            if (score < 15) techAuto.push('robots_txt_allow');
+            const techAutoFiltered = techAuto.filter(ft => FIX_CONFIG[ft] && !FIX_CONFIG[ft].needsInput);
+            items.push({
+                priority: score === 15 ? 'positive' : score <= 5 ? 'critical' : 'medium',
+                area: 'Technical Crawlability', maxScore: 15, score, message: msg,
+                fixType: techAutoFiltered[0] || null,
+                extraFixes: techAutoFiltered.slice(1),
+                emoji: '🔍',
+            });
         }
 
         // ── 2. Structured Data & Schema (20 pts) ──
@@ -753,7 +805,18 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
             if (!cs.has_faq_schema) issues.push('Add FAQPage schema');
             if (!cs.has_org_schema) issues.push('Add Organization/Product schema');
             const msg = score === 20 ? 'Full schema coverage. AI engines can fully understand your content structure.' : issues.join('. ') + '.';
-            items.push({ priority: score === 20 ? 'positive' : !cs.has_schema ? 'critical' : 'medium', area: 'Structured Data & Schema', maxScore: 20, score, message: msg, fixType: score < 20 ? 'schema' : null, emoji: '🏗️' });
+            let schemaPrimary = null;
+            if (score < 20) {
+                if (!cs.has_schema) schemaPrimary = 'schema';
+                else if (!cs.has_org_schema || !cs.has_faq_schema) schemaPrimary = 'schema_enrich';
+            }
+            items.push({
+                priority: score === 20 ? 'positive' : !cs.has_schema ? 'critical' : 'medium',
+                area: 'Structured Data & Schema', maxScore: 20, score, message: msg,
+                fixType: schemaPrimary,
+                extraFixes: [],
+                emoji: '🏗️',
+            });
         }
 
         // ── 3. Content Quality (30 pts) ──
@@ -772,12 +835,22 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
             score = Math.min(30, score);
             const issues = [];
             if (cs.word_count < 1200) issues.push(`${cs.word_count} words — aim for 1,200+`);
-            if (!cs.has_direct_answer) issues.push('Add a 60-100 word direct answer at the top');
-            if (!cs.has_tldr) issues.push('Add TL;DR or Key Takeaways');
+            if (!cs.has_direct_answer) issues.push('Add a concise “In brief” answer at the top (inverted pyramid)');
+            if (!cs.has_tldr) issues.push('Add a Key takeaways block near the top');
             if (!cs.has_conversational_queries) issues.push('Target conversational queries');
             const msg = score >= 25 ? 'Strong content quality. Depth, direct answers, and conversational targeting are solid.' : issues.join('. ') + '.';
-            // Multi-fix: content_depth (expand) + faq (includes direct answers)
-            items.push({ priority: score >= 25 ? 'positive' : score <= 10 ? 'critical' : score <= 20 ? 'high' : 'medium', area: 'Content Quality', maxScore: 30, score, message: msg, fixType: score < 25 ? 'content_depth' : null, extraFixes: score < 25 ? ['faq'] : [], emoji: '✍️' });
+            const cq = [];
+            if (!cs.has_direct_answer || !cs.has_tldr) cq.push('opening_summary');
+            if (cs.word_count < 1200) cq.push('content_depth');
+            cq.push('faq');
+            const cqF = cq.filter(ft => FIX_CONFIG[ft] && !FIX_CONFIG[ft].needsInput);
+            items.push({
+                priority: score >= 25 ? 'positive' : score <= 10 ? 'critical' : score <= 20 ? 'high' : 'medium',
+                area: 'Content Quality', maxScore: 30, score, message: msg,
+                fixType: score < 25 ? cqF[0] : null,
+                extraFixes: score < 25 ? cqF.slice(1) : [],
+                emoji: '✍️',
+            });
         }
 
         // ── 4. Credibility (15 pts) ──
@@ -793,7 +866,17 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
             if (cs.citation_count < 3) issues.push('Link to authoritative external sources');
             if (!cs.has_quotes) issues.push('Include expert quotes or testimonials');
             const msg = score === 15 ? 'Excellent credibility signals. Statistics, citations, and expert quotes are present.' : issues.join('. ') + '.';
-            items.push({ priority: score === 15 ? 'positive' : score <= 5 ? 'high' : 'medium', area: 'Credibility', maxScore: 15, score, message: msg, fixType: score < 15 ? 'authority' : null, emoji: '📊' });
+            const cred = [];
+            if (cs.stat_count < 3) cred.push('authority');
+            if (!cs.has_quotes) cred.push('expert_quotes');
+            const credF = cred.filter(ft => FIX_CONFIG[ft] && !FIX_CONFIG[ft].needsInput);
+            items.push({
+                priority: score === 15 ? 'positive' : score <= 5 ? 'high' : 'medium',
+                area: 'Credibility', maxScore: 15, score, message: msg,
+                fixType: score < 15 ? credF[0] : null,
+                extraFixes: score < 15 ? credF.slice(1) : [],
+                emoji: '📊',
+            });
         }
 
         // ── 5. AI-Specific Formatting (20 pts) ──
@@ -815,15 +898,23 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
             if (!cs.has_faq) issues.push('Add a contextual FAQ block');
             if (!cs.has_table) issues.push('Add comparison tables');
             const msg = score === 20 ? 'Excellent AI-specific formatting. Content is fully optimized for AI extraction.' : issues.join('. ') + '.';
-            // Multi-fix: structure + formatting + readability + faq + data_tables
-            items.push({ priority: score === 20 ? 'positive' : score <= 8 ? 'high' : 'medium', area: 'AI-Specific Formatting', maxScore: 20, score, message: msg, fixType: score < 20 ? 'structure' : null, extraFixes: score < 20 ? ['formatting', 'readability', 'faq', 'data_tables'] : [], emoji: '🤖' });
+            items.push({
+                priority: score === 20 ? 'positive' : score <= 8 ? 'high' : 'medium',
+                area: 'AI-Specific Formatting', maxScore: 20, score, message: msg,
+                fixType: score < 20 ? 'structure' : null,
+                extraFixes: score < 20 ? ['formatting', 'readability', 'faq', 'data_tables'] : [],
+                emoji: '🤖',
+            });
         }
 
-        return items.map(item => ({
-            ...item,
-            applied:  item.fixType ? !!appliedTypes[item.fixType]  : false,
-            applying: item.fixType ? !!applyingTypes[item.fixType] : false,
-        }));
+        return items.map(item => {
+            const autoTypes = collectAutoFixTypesForItem(item);
+            const appliedRow = autoTypes.length === 0
+                ? (item.priority === 'positive')
+                : autoTypes.every(ft => appliedTypes[ft]);
+            const applyingRow = autoTypes.some(ft => applyingTypes[ft]);
+            return { ...item, applied: appliedRow, applying: applyingRow };
+        });
     };
 
     const allItems = buildItems();
@@ -833,10 +924,31 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
         setApplyingTypes(p => ({ ...p, [fixType]: true }));
         const data = { post_id, type: fixType, enabled: true };
         if (userInput !== undefined) data.user_input = userInput;
-        apiFetch({ path: '/gleo/v1/apply', method: 'POST', data })
+        return apiFetch({ path: '/gleo/v1/apply', method: 'POST', data })
             .then(() => { setAppliedTypes(p => ({ ...p, [fixType]: true })); addToast(config?.successMsg || `${fixType} applied.`); })
-            .catch(err => addToast(`Failed: ${err.message || 'Unknown error'}`))
+            .catch(err => { addToast(`Failed: ${err.message || 'Unknown error'}`); })
             .finally(() => setApplyingTypes(p => ({ ...p, [fixType]: false })));
+    };
+
+    const applyCategoryFixes = async ( item ) => {
+        const types = collectAutoFixTypesForItem( item );
+        if ( types.length === 0 ) {
+            return;
+        }
+        let failed = false;
+        for ( const ft of types ) {
+            setApplyingTypes( p => ( { ...p, [ ft ]: true } ) );
+            try {
+                await apiFetch( { path: '/gleo/v1/apply', method: 'POST', data: { post_id, type: ft, enabled: true } } );
+                await new Promise( r => setTimeout( r, 70 ) );
+                setAppliedTypes( p => ( { ...p, [ ft ]: true } ) );
+            } catch ( e ) {
+                failed = true;
+            } finally {
+                setApplyingTypes( p => ( { ...p, [ ft ]: false } ) );
+            }
+        }
+        addToast( failed ? 'Some fixes in this category failed.' : `Applied: ${ types.map( ft => FIX_CONFIG[ ft ]?.label || ft ).join( ', ' ) }` );
     };
 
     const handleFix = fixType => {
@@ -877,7 +989,11 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
         setIsApplyingAll(false);
     };
 
-    const allAutoFixed = allItems.filter(i => i.fixType && !FIX_CONFIG[i.fixType]?.needsInput).every(i => i.applied);
+    const allAutoFixed = ( () => {
+        const u = new Set();
+        allItems.forEach( it => collectAutoFixTypesForItem( it ).forEach( ft => u.add( ft ) ) );
+        return u.size === 0 || [ ...u ].every( ft => appliedTypes[ ft ] );
+    } )();
     // Honest headline score: use analyzer GEO score from the last stored scan (never inflate from local "applied" clicks).
     const pillarSumRaw = allItems.reduce((acc, item) => acc + (item.score || 0), 0);
     const storedGeo     = typeof result.geo_score === 'number' && ! Number.isNaN(result.geo_score )
@@ -1015,7 +1131,7 @@ const GeoReportCard = ( { report, totalReportCards = 1 } ) => {
                                             ) : item.fixType ? (
                                                 <button className="gleo-btn gleo-btn-outline"
                                                     style={{ fontSize: 11, padding: '4px 12px' }}
-                                                    onClick={() => handleFix(item.fixType)}
+                                                    onClick={() => applyCategoryFixes(item)}
                                                     disabled={item.applying}>
                                                     {item.applying ? 'Fixing…' : 'Autofix Category'}
                                                 </button>
@@ -1102,7 +1218,8 @@ const App = () => {
     const [saveStatus, setSaveStatus]           = useState(null);
     const [isScanning, setIsScanning]           = useState(false);
     const [scanProgress, setScanProgress]       = useState(0);
-    const [fakeProgress, setFakeProgress]       = useState(0);
+    const [scanTotal, setScanTotal]             = useState(0);
+    const [scanCompleted, setScanCompleted]   = useState(0);
     const [scanResults, setScanResults]         = useState([]);
     const [overrideSchema, setOverrideSchema]   = useState(false);
     const [availablePosts, setAvailablePosts]   = useState([]);
@@ -1110,21 +1227,6 @@ const App = () => {
     const [isLoadingPosts, setIsLoadingPosts]   = useState(true);
     const [showScanModal, setShowScanModal]     = useState(false);
     const scanJustStarted                       = useRef(false);
-    const progressIntervalRef                   = useRef(null);
-
-    // Simulated progress
-    useEffect(() => {
-        if (isScanning) {
-            setFakeProgress(8);
-            progressIntervalRef.current = setInterval(() => {
-                setFakeProgress(p => p >= 88 ? p : p + Math.max(0.4, (88 - p) * 0.04));
-            }, 700);
-        } else {
-            clearInterval(progressIntervalRef.current);
-            setFakeProgress(0);
-        }
-        return () => clearInterval(progressIntervalRef.current);
-    }, [isScanning]);
 
     useEffect(() => {
         apiFetch({ path: '/wp/v2/settings' }).then(s => {
@@ -1141,7 +1243,10 @@ const App = () => {
     const checkScanStatus = () => {
         apiFetch({ path: '/gleo/v1/scan/status' })
             .then(res => {
-                setIsScanning(res.is_scanning); setScanProgress(res.progress);
+                setIsScanning(res.is_scanning);
+                setScanProgress(typeof res.progress === 'number' ? res.progress : 0);
+                setScanTotal(typeof res.total === 'number' ? res.total : 0);
+                setScanCompleted(typeof res.completed === 'number' ? res.completed : 0);
                 if (res.results?.length > 0) {
                     setScanResults(res.results);
                     if (!res.is_scanning && scanJustStarted.current) {
@@ -1163,7 +1268,12 @@ const App = () => {
     const handleScan = () => {
         if (selectedPosts.length === 0) { setSaveStatus({ type: 'error', message: 'Select at least one post.' }); return; }
         scanJustStarted.current = true;
-        setIsScanning(true); setScanProgress(0); setScanResults([]); setSaveStatus(null);
+        setIsScanning(true);
+        setScanProgress(0);
+        setScanTotal(0);
+        setScanCompleted(0);
+        setScanResults([]);
+        setSaveStatus(null);
         apiFetch({ path: '/gleo/v1/scan/start', method: 'POST', data: { post_ids: selectedPosts } })
             .then(res => { setSaveStatus({ type: 'success', message: res.message }); checkScanStatus(); })
             .catch(err => { setSaveStatus({ type: 'error', message: err.message || 'Error starting scan.' }); setIsScanning(false); });
@@ -1294,20 +1404,36 @@ const App = () => {
                                     onClick={handleScan} disabled={isScanning || selectedPosts.length === 0}>
                                     {isScanning ? 'Analyzing posts…' : `Analyze ${selectedPosts.length} post${selectedPosts.length !== 1 ? 's' : ''}`}
                                 </button>
-                                {isScanning && (
+                                {isScanning && (() => {
+                                    const waitingFirst = scanTotal > 0 && scanCompleted === 0;
+                                    const pct = waitingFirst ? null : Math.min(100, Math.round(scanProgress));
+                                    return (
                                     <div style={{ marginTop: 14 }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                                            <span style={{ fontSize: 12.5, color: 'var(--fg-muted)' }}>Analyzing with AI…</span>
-                                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg-muted)' }}>
-                                                {Math.round(scanProgress > 0 ? scanProgress : fakeProgress)}%
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5, gap: 10 }}>
+                                            <span style={{ fontSize: 12.5, color: 'var(--fg-muted)' }}>
+                                                {waitingFirst
+                                                    ? `Analyzing ${scanTotal} post${scanTotal !== 1 ? 's' : ''}…`
+                                                    : scanTotal > 0
+                                                        ? `Completed ${scanCompleted} of ${scanTotal}`
+                                                        : 'Starting scan…'}
                                             </span>
+                                            {pct !== null && (
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg-muted)', flexShrink: 0 }}>
+                                                {pct}%
+                                            </span>
+                                            )}
                                         </div>
-                                        <div className="gleo-progress-bar">
-                                            <div className="gleo-progress-fill"
-                                                style={{ width: `${Math.min(scanProgress > 0 ? scanProgress : fakeProgress, 100)}%` }}/>
+                                        <div className={waitingFirst || scanTotal === 0 ? 'gleo-progress-bar gleo-progress-bar--indeterminate' : 'gleo-progress-bar'}>
+                                            {waitingFirst || scanTotal === 0 ? (
+                                                <div className="gleo-progress-indeterminate-strip" aria-hidden="true" />
+                                            ) : (
+                                                <div className="gleo-progress-fill"
+                                                    style={{ width: `${pct}%` }}/>
+                                            )}
                                         </div>
                                     </div>
-                                )}
+                                    );
+                                })()}
                             </div>
                         </div>
 
