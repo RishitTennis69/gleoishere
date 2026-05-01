@@ -148,10 +148,6 @@ function gleo_admin_scripts( $hook ) {
 			'posts'           => $posts_data,
 			'nodeApiUrl'      => esc_url_raw( $node_api_url ),
 		);
-		if ( defined( 'GLEO_SUPABASE_URL' ) && defined( 'GLEO_SUPABASE_ANON_KEY' ) ) {
-			$gleo_data['supabaseUrl']    = GLEO_SUPABASE_URL;
-			$gleo_data['supabaseAnonKey'] = GLEO_SUPABASE_ANON_KEY;
-		}
 
 		wp_localize_script( 'gleo-admin-app', 'gleoData', $gleo_data );
 	}

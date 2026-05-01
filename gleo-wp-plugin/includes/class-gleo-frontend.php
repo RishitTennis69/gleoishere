@@ -32,6 +32,11 @@ class Gleo_Frontend {
 
 		// Optional: append Allow rules for common AI crawlers (enabled via Gleo apply action).
 		add_filter( 'robots_txt', array( $this, 'append_ai_crawler_allows_to_robots_txt' ), 99, 2 );
+
+		// Block themes often wrap the post in a 3-column row with only the middle column filled.
+		// Redistribute those inner blocks across left / center / right (parse_blocks) so the row isn’t empty on the sides.
+		add_filter( 'the_content', array( $this, 'filter_rebalance_three_column_rows' ), 8 );
+		add_filter( 'wp_insert_post_data', array( $this, 'filter_insert_post_rebalance_columns' ), 99, 2 );
 	}
 
 	/**
@@ -267,25 +272,57 @@ GLEO_CSS;
 		$accent_soft = $this->hex_to_rgba( $accent, '0.12' );
 		?>
 <style id="gleo-content-styles">
-/* Headings injected by Gleo “structure” fix — inherit theme typography */
+/* Headings injected by Gleo “structure” fix — same body stack + scale as article copy (no random serif/size jumps) */
 .entry-content h2.wp-block-heading.gleo-section-heading,
 main h2.wp-block-heading.gleo-section-heading,
 .wp-site-blocks h2.wp-block-heading.gleo-section-heading {
-	font-family: var(--wp--preset--font-family--heading, var(--wp--preset--font-family--body, inherit));
-	font-size: var(--wp--preset--font-size--large, var(--wp--preset--font-size--medium, inherit));
-	font-weight: var(--wp--custom--heading--font-weight, 700);
-	letter-spacing: var(--wp--custom--heading--letter-spacing, -0.02em);
-	line-height: var(--wp--custom--heading--line-height, 1.25);
-	color: inherit;
-	margin-top: var(--wp--preset--spacing--60, 1.5em);
-	margin-bottom: var(--wp--preset--spacing--40, 0.65em);
+	font-family: var(--wp--preset--font-family--body, var(--wp--preset--font-family--heading, inherit));
+	font-size: clamp(1.12rem, 1.02rem + 0.45vw, 1.35rem);
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	line-height: 1.35;
+	color: var(--wp--preset--color--contrast, var(--wp--preset--color--foreground, inherit));
+	margin-top: clamp(2rem, 5vw, 2.75rem);
+	margin-bottom: clamp(0.85rem, 2vw, 1.15rem);
+	max-width: 100%;
+}
+
+/* Inside column layouts, themes often force accent-colored or centered headings — match body copy. */
+.entry-content .wp-block-columns .wp-block-column h2.wp-block-heading.gleo-section-heading,
+main .wp-block-columns .wp-block-column h2.wp-block-heading.gleo-section-heading {
+	color: var(--wp--preset--color--contrast, var(--wp--preset--color--foreground, #1e293b));
+	text-align: left;
+}
+
+/* First block after a Gleo section H2: same reading size as paragraphs (fixes huge list vs tiny body) */
+.entry-content h2.gleo-section-heading + .wp-block-list,
+.entry-content h2.gleo-section-heading + ul.wp-block-list,
+.entry-content h2.gleo-section-heading + ol.wp-block-list,
+.entry-content h2.gleo-section-heading + .wp-block-paragraph {
+	font-family: var(--wp--preset--font-family--body, inherit) !important;
+	font-size: var(--wp--preset--font-size--medium, var(--wp--preset--font-size--normal, 1.0625rem)) !important;
+	line-height: 1.7 !important;
+}
+.entry-content h2.gleo-section-heading + .wp-block-list li,
+.entry-content h2.gleo-section-heading + ul.wp-block-list li,
+.entry-content h2.gleo-section-heading + ol.wp-block-list li {
+	font-size: inherit !important;
+	line-height: inherit !important;
+	margin-bottom: 0.65em;
+}
+
+/* Extra vertical space after Gleo-generated lists so the next paragraph is not glued on */
+.entry-content h2.gleo-section-heading + .wp-block-list,
+.entry-content h2.gleo-section-heading + ul.wp-block-list,
+.entry-content h2.gleo-section-heading + ol.wp-block-list {
+	margin-bottom: 1.35em;
 }
 /* ───────────────────────────────────────────────────────────────────────
    Gleo content blocks — clean, modern, theme-aware, fully responsive.
    Uses CSS custom properties so JS can adapt colors per-element based on
    the actual rendered background (light/dark sections).
    ─────────────────────────────────────────────────────────────────────── */
-:where(.gleo-faq-wrap, .gleo-stats-callout, .gleo-table-block) {
+:where(.gleo-faq-wrap, .gleo-stats-callout, .gleo-table-block, .gleo-opening-summary-wrap, .gleo-expert-quote) {
   --gc-text:        #0f172a;
   --gc-muted:       #64748b;
   --gc-subtle:      #94a3b8;
@@ -488,13 +525,33 @@ main h2.wp-block-heading.gleo-section-heading,
   }
 }
 
+/* Column layouts: left-aligned copy so bullets and multi-column blocks don’t “float” in the center. */
+.entry-content .wp-block-columns,
+main .wp-block-columns {
+  align-items: flex-start;
+}
+.entry-content .wp-block-columns .wp-block-column,
+main .wp-block-columns .wp-block-column {
+  text-align: left;
+  min-width: 0;
+}
+.entry-content .wp-block-columns .wp-block-column :is(p, h1, h2, h3, h4, ul, ol),
+main .wp-block-columns .wp-block-column :is(p, h1, h2, h3, h4, ul, ol) {
+  text-align: left;
+}
+.entry-content .wp-block-columns .wp-block-column :is(ul, ol).wp-block-list,
+main .wp-block-columns .wp-block-column :is(ul, ol).wp-block-list {
+  list-style-position: outside;
+  padding-left: 1.35em;
+  margin-left: 0;
+}
+
 /* Column consistency for AI-generated feature blocks — roomier cards, less “thin strip” */
 .entry-content .wp-block-columns .wp-block-column > :where(div, section, article) {
   border: 1px solid var(--gc-border);
   border-radius: var(--gc-radius);
   background: var(--gc-card);
   padding: 20px 20px 22px;
-  min-height: 5.5rem;
 }
 .entry-content .wp-block-columns .wp-block-column > :where(div, section, article) > *:first-child { margin-top: 0; }
 .entry-content .wp-block-columns .wp-block-column > :where(div, section, article) > *:last-child { margin-bottom: 0; }
@@ -509,6 +566,7 @@ main h2.wp-block-heading.gleo-section-heading,
   font-size: clamp(1.02rem, 0.95rem + 0.35vw, 1.28rem);
   line-height: 1.28;
   margin-bottom: 0.55em;
+  color: var(--wp--preset--color--contrast, var(--wp--preset--color--foreground, #1e293b));
 }
 .entry-content .wp-block-columns.is-layout-flex {
   gap: 1.25rem 1.5rem !important;
@@ -526,9 +584,7 @@ main h2.wp-block-heading.gleo-section-heading,
 }
 .gleo-stats-inner { margin: 0; }
 .gleo-stats-text {
-  font-size: clamp(0.94rem, 0.9rem + 0.2vw, 1.02rem);
   font-weight: 400;
-  line-height: 1.65;
   margin: 0;
   color: var(--gc-text);
   word-break: break-word;
@@ -539,50 +595,78 @@ main h2.wp-block-heading.gleo-section-heading,
   .gleo-stats-callout { padding: 16px 16px; }
 }
 
-/* Opening summary (inverted pyramid + key takeaways) */
+/* Opening summary (inverted pyramid — “In brief” only): full content width + body typography */
+.entry-content .wp-block-html:has(.gleo-opening-summary-wrap),
+main .wp-block-html:has(.gleo-opening-summary-wrap) {
+  width: 100%;
+  max-width: min(100%, var(--wp--style--global--wide-size, var(--wp--style--global--content-size, 72rem)));
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+.entry-content .gleo-opening-summary-wrap,
+main .gleo-opening-summary-wrap,
+.wp-site-blocks .gleo-opening-summary-wrap {
+  width: 100%;
+  max-width: min(100%, var(--wp--style--global--wide-size, var(--wp--style--global--content-size, 72rem)));
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
 .gleo-opening-summary-wrap {
-  margin: 1.75em 0 2em;
-  padding: 18px 20px 20px;
+  margin: clamp(1.75rem, 4vw, 2.5rem) 0;
+  padding: clamp(1.1rem, 2.5vw, 1.5rem) clamp(1.15rem, 3vw, 1.85rem);
   border-radius: var(--gc-radius);
   border: 1px solid var(--gc-border);
   background: var(--gc-surface);
   box-shadow: var(--gc-shadow);
+  font-family: var(--wp--preset--font-family--body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  text-align: left;
 }
 .gleo-direct-answer {
-  margin: 0 0 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--gc-border-soft);
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 .gleo-direct-answer p {
   margin: 0;
-  font-size: clamp(0.98rem, 0.92rem + 0.25vw, 1.08rem);
-  line-height: 1.65;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  text-align: left;
+  font-size: var(--wp--preset--font-size--medium, var(--wp--preset--font-size--normal, 1.0625rem));
+  line-height: 1.7;
   color: var(--gc-text);
 }
 .gleo-lead-label {
-  display: inline-block;
+  display: block;
   font-weight: 800;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--gc-accent);
-  margin-right: 0.35em;
-}
-.gleo-key-takeaways-title {
-  margin: 0 0 10px;
-  font-size: clamp(1rem, 0.92rem + 0.35vw, 1.2rem);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: var(--gc-text);
-}
-.gleo-key-takeaways-list {
+  color: var(--gc-muted);
   margin: 0;
-  padding-left: 1.15em;
-  color: var(--gc-text);
-  line-height: 1.55;
+  padding-bottom: 0.2rem;
+  border-bottom: 2px solid var(--gc-accent-mid);
+  line-height: 1.2;
 }
-.gleo-key-takeaways-list li { margin: 0.35em 0; }
 
+/* Gleo cards: use theme wide width so copy is not stuck in a thin inner strip */
+.entry-content :is(.gleo-stats-callout, .gleo-expert-quote, .gleo-table-block, .gleo-faq-wrap),
+main :is(.gleo-stats-callout, .gleo-expert-quote, .gleo-table-block, .gleo-faq-wrap) {
+  width: 100%;
+  max-width: min(100%, var(--wp--style--global--wide-size, var(--wp--style--global--content-size, 72rem)));
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+.gleo-stats-text,
+.gleo-expert-quote__text {
+  font-size: var(--wp--preset--font-size--medium, var(--wp--preset--font-size--normal, 1.0625rem)) !important;
+  line-height: 1.75 !important;
+  font-family: var(--wp--preset--font-family--body, inherit) !important;
+}
 /* Expert quote */
 .gleo-expert-quote {
   margin: 1.75em 0;
@@ -594,8 +678,6 @@ main h2.wp-block-heading.gleo-section-heading,
 }
 .gleo-expert-quote__text {
   margin: 0;
-  font-size: clamp(0.98rem, 0.92rem + 0.2vw, 1.05rem);
-  line-height: 1.6;
   color: var(--gc-text);
 }
 .gleo-expert-quote__text p { margin: 0; }
@@ -644,7 +726,7 @@ main h2.wp-block-heading.gleo-section-heading,
     /* ── Adaptive colour: set CSS vars per element based on the element's
        actual rendered background. PHP can't reliably know whether the theme
        drops the post content into a light or dark section. ─────────────── */
-    document.querySelectorAll('.gleo-faq-wrap, .gleo-stats-callout, .gleo-table-block').forEach(function (el) {
+    document.querySelectorAll('.gleo-faq-wrap, .gleo-stats-callout, .gleo-table-block, .gleo-opening-summary-wrap, .gleo-expert-quote').forEach(function (el) {
       var rgb  = getActualBg(el.parentElement || el);
       var dark = lum(rgb[0], rgb[1], rgb[2]) < 0.35;
       if (!dark) return; /* light defaults already match */
@@ -871,29 +953,187 @@ main h2.wp-block-heading.gleo-section-heading,
 		);
 	}
 
+	/**
+	 * Spread blocks across three columns when the theme left the outer columns empty and put everything in the middle.
+	 *
+	 * @param string $content Post content (block markup).
+	 * @return string
+	 */
+	public function filter_rebalance_three_column_rows( $content ) {
+		if ( ! is_string( $content ) || '' === $content || strpos( $content, 'wp:columns' ) === false ) {
+			return $content;
+		}
+		return $this->gleo_rebalance_column_markup( $content );
+	}
+
+	/**
+	 * Persist balanced columns when the post is saved so the block editor matches the front end.
+	 *
+	 * @param array $data    Post data.
+	 * @param array $postarr Original post array.
+	 * @return array
+	 */
+	public function filter_insert_post_rebalance_columns( $data, $postarr ) {
+		if ( empty( $data['post_content'] ) || ! is_string( $data['post_content'] ) ) {
+			return $data;
+		}
+		if ( isset( $data['post_type'] ) && 'revision' === $data['post_type'] ) {
+			return $data;
+		}
+		if ( isset( $postarr['post_type'] ) && 'revision' === $postarr['post_type'] ) {
+			return $data;
+		}
+		if ( strpos( $data['post_content'], 'wp:columns' ) === false ) {
+			return $data;
+		}
+		$data['post_content'] = $this->gleo_rebalance_column_markup( $data['post_content'] );
+		return $data;
+	}
+
+	/**
+	 * @param string $content Block-serialized post content.
+	 * @return string
+	 */
+	private function gleo_rebalance_column_markup( $content ) {
+		if ( ! function_exists( 'parse_blocks' ) || ! function_exists( 'serialize_blocks' ) ) {
+			return $content;
+		}
+		$blocks = parse_blocks( $content );
+		if ( empty( $blocks ) ) {
+			return $content;
+		}
+		$out = $this->gleo_balance_columns_recursive( $blocks );
+		return serialize_blocks( $out );
+	}
+
+	/**
+	 * @param array $blocks Parsed blocks.
+	 * @return array
+	 */
+	private function gleo_balance_columns_recursive( $blocks ) {
+		$result = array();
+		foreach ( $blocks as $block ) {
+			$name = isset( $block['blockName'] ) ? $block['blockName'] : '';
+			if ( 'core/columns' === $name && ! empty( $block['innerBlocks'] ) ) {
+				$cols = $block['innerBlocks'];
+				if ( 3 === count( $cols )
+					&& isset( $cols[0], $cols[1], $cols[2] )
+					&& $this->gleo_core_column_is_effectively_empty( $cols[0] )
+					&& $this->gleo_core_column_is_effectively_empty( $cols[2] )
+					&& ! $this->gleo_core_column_is_effectively_empty( $cols[1] ) ) {
+					$middle_inners = isset( $cols[1]['innerBlocks'] ) && is_array( $cols[1]['innerBlocks'] ) ? $cols[1]['innerBlocks'] : array();
+					if ( count( $middle_inners ) >= 2 ) {
+						list( $left, $mid, $right ) = $this->gleo_partition_blocks_into_three_columns( $middle_inners );
+						$cols[0]['innerBlocks'] = $left;
+						$cols[1]['innerBlocks'] = $mid;
+						$cols[2]['innerBlocks'] = $right;
+						$block['innerBlocks']   = $cols;
+					}
+				}
+			}
+			if ( ! empty( $block['innerBlocks'] ) ) {
+				$block['innerBlocks'] = $this->gleo_balance_columns_recursive( $block['innerBlocks'] );
+			}
+			$result[] = $block;
+		}
+		return $result;
+	}
+
+	/**
+	 * @param array $column_block A core/column block.
+	 * @return bool
+	 */
+	private function gleo_core_column_is_effectively_empty( $column_block ) {
+		if ( ! is_array( $column_block ) ) {
+			return true;
+		}
+		if ( ( $column_block['blockName'] ?? '' ) !== 'core/column' ) {
+			return false;
+		}
+		$inners = isset( $column_block['innerBlocks'] ) && is_array( $column_block['innerBlocks'] ) ? $column_block['innerBlocks'] : array();
+		if ( empty( $inners ) ) {
+			return true;
+		}
+		foreach ( $inners as $inner ) {
+			if ( $this->gleo_block_counts_as_meaningful_content( $inner ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * @param array $block Parsed block.
+	 * @return bool
+	 */
+	private function gleo_block_counts_as_meaningful_content( $block ) {
+		if ( ! is_array( $block ) ) {
+			return false;
+		}
+		$name = $block['blockName'] ?? '';
+		if ( 'core/spacer' === $name || 'core/separator' === $name ) {
+			return false;
+		}
+		if ( 'core/paragraph' === $name ) {
+			$html = isset( $block['innerHTML'] ) ? $block['innerHTML'] : '';
+			$text = trim( wp_strip_all_tags( $html ) );
+			return '' !== $text;
+		}
+		return '' !== $name;
+	}
+
+	/**
+	 * Split an ordered list of blocks into three runs for left / center / right columns.
+	 *
+	 * @param array $blocks Middle-column inner blocks.
+	 * @return array{0:array,1:array,2:array}
+	 */
+	private function gleo_partition_blocks_into_three_columns( array $blocks ) {
+		$n = count( $blocks );
+		if ( $n < 2 ) {
+			return array( $blocks, array(), array() );
+		}
+		if ( 2 === $n ) {
+			return array( array( $blocks[0] ), array(), array( $blocks[1] ) );
+		}
+		$left  = array();
+		$mid   = array();
+		$right = array();
+		$idx   = 0;
+		for ( $c = 0; $c < 3; $c++ ) {
+			$end = (int) floor( ( $c + 1 ) * $n / 3 );
+			while ( $idx < $end ) {
+				if ( 0 === $c ) {
+					$left[] = $blocks[ $idx ];
+				} elseif ( 1 === $c ) {
+					$mid[] = $blocks[ $idx ];
+				} else {
+					$right[] = $blocks[ $idx ];
+				}
+				$idx++;
+			}
+		}
+		return array( $left, $mid, $right );
+	}
+
 	private function inject_after_paragraph( $content, $html_to_inject, $target_index ) {
-		$paragraphs = preg_split( '/(<\/p>\s*)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
-		$new_content = '';
-		$p_count = 0;
-		$injected = false;
-
-		foreach ( $paragraphs as $part ) {
-			if ( preg_match( '/<\/p>/i', $part ) ) {
-				$p_count++;
-			}
-			$new_content .= $part;
-
-			if ( $p_count === $target_index && ! $injected ) {
-				$new_content .= "\n" . $html_to_inject . "\n";
-				$injected = true;
-			}
+		if ( ! is_string( $content ) || '' === $content || $target_index < 1 ) {
+			return $content . "\n" . $html_to_inject . "\n";
 		}
-
-		if ( ! $injected ) {
-			$new_content .= "\n" . $html_to_inject . "\n";
+		if ( ! preg_match_all( '/<\/p\s*>/i', $content, $matches, PREG_OFFSET_CAPTURE ) ) {
+			return $content . "\n" . $html_to_inject . "\n";
 		}
-
-		return $new_content;
+		$hits = $matches[0];
+		if ( count( $hits ) < $target_index ) {
+			return $content . "\n" . $html_to_inject . "\n";
+		}
+		$close = $hits[ $target_index - 1 ];
+		$pos   = (int) $close[1] + strlen( $close[0] );
+		$tail  = substr( $content, $pos );
+		if ( preg_match( '/^\s*((?:<!--\s*\/wp:paragraph\s*-->[\s\r\n]*)+)/i', $tail, $m ) ) {
+			$pos += strlen( $m[0] );
+		}
+		return substr( $content, 0, $pos ) . "\n" . $html_to_inject . "\n" . substr( $content, $pos );
 	}
 
 	/**
@@ -1010,7 +1250,6 @@ main h2.wp-block-heading.gleo-section-heading,
 			'Mistakes to avoid with %s',
 			'Best practices for %s',
 			'Step-by-step: %s',
-			'Checklist for %s',
 			'Tools that help with %s',
 			'Resources for learning %s',
 			'Further reading on %s',
@@ -1140,6 +1379,97 @@ main h2.wp-block-heading.gleo-section-heading,
 	}
 
 	/**
+	 * Remove Gleo key takeaways block (idempotent re-apply).
+	 *
+	 * @param string $content Post content.
+	 * @return string
+	 */
+	private function gleo_strip_key_takeaways_block( $content ) {
+		$content = preg_replace(
+			'/\n?<!--\s*wp:heading\s*-->\s*<h2[^>]*gleo-key-takeaways-heading[^>]*>[\s\S]*?<\/h2>\s*<!--\s*\/wp:heading\s*-->\s*/iu',
+			'',
+			$content
+		);
+		$content = preg_replace(
+			'/\n?<!--\s*wp:html\s*-->\s*<section class="gleo-key-takeaways-block"[^>]*>[\s\S]*?<!--\s*gleo:key-takeaways:end\s*-->\s*<!--\s*\/wp:html\s*-->\s*/iu',
+			'',
+			$content
+		);
+		// Legacy: key takeaways merged inside opening summary or standalone div.
+		$content = preg_replace(
+			'/\n?<!--\s*wp:heading\s*-->\s*<h3[^>]*gleo-key-takeaways-title[^>]*>[\s\S]*?<\/h3>\s*<!--\s*\/wp:heading\s*-->\s*/iu',
+			'',
+			$content
+		);
+		$content = preg_replace(
+			'/<div[^>]*\bgleo-key-takeaways\b[^>]*>[\s\S]*?<\/div>\s*/iu',
+			'',
+			$content
+		);
+		return $content;
+	}
+
+	/**
+	 * Remove Gleo statistics callout HTML blocks (idempotent re-apply; clears legacy placeholder callouts).
+	 *
+	 * @param string $content Post content.
+	 * @return string
+	 */
+	private function gleo_strip_stats_callout_blocks( $content ) {
+		return preg_replace(
+			'/\n?<!--\s*wp:html\s*-->\s*<aside[^>]*\bgleo-stats-callout\b[^>]*>[\s\S]*?<\/aside>\s*<!--\s*\/wp:html\s*-->\s*/iu',
+			'',
+			$content
+		);
+	}
+
+	/**
+	 * Detect legacy instructional placeholder copy that should never appear on the public site.
+	 *
+	 * @param string $text Plain or HTML text.
+	 * @return bool
+	 */
+	private function gleo_text_looks_like_stat_placeholder_instruction( $text ) {
+		$t = strtolower( wp_strip_all_tags( (string) $text ) );
+		if ( '' === $t ) {
+			return false;
+		}
+		$needles = array(
+			'add a verified',
+			'source-backed metric',
+			'figure and source name',
+			'verified, source-backed',
+			'include the figure',
+		);
+		foreach ( $needles as $n ) {
+			if ( strpos( $t, $n ) !== false ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Remove stats callouts and HTML blocks that contain instructional placeholder “statistics” text.
+	 *
+	 * @param string $content Post content.
+	 * @return string
+	 */
+	private function gleo_strip_instructional_stat_snippets( $content ) {
+		$content = $this->gleo_strip_stats_callout_blocks( $content );
+		return preg_replace_callback(
+			'/<!--\s*wp:html\s*-->[\s\S]*?<!--\s*\/wp:html\s*-->/iu',
+			function ( $m ) {
+				if ( stripos( $m[0], 'gleo-stats' ) === false ) {
+					return $m[0];
+				}
+				return $this->gleo_text_looks_like_stat_placeholder_instruction( $m[0] ) ? '' : $m[0];
+			},
+			$content
+		);
+	}
+
+	/**
 	 * Remove Gleo expert quote figure (idempotent).
 	 *
 	 * @param string $content Post content.
@@ -1168,20 +1498,47 @@ main h2.wp-block-heading.gleo-section-heading,
 	}
 
 	/**
-	 * Build 60–100 word "in brief" lead from contextual depth or post text.
+	 * Structured text fragments from post content (paragraph/list-level) to avoid merged heading/body junk.
+	 *
+	 * @param WP_Post $post Post object.
+	 * @return string[]
+	 */
+	private function gleo_content_fragments( WP_Post $post ) {
+		$fragments = array();
+		if ( ! is_string( $post->post_content ) || '' === trim( $post->post_content ) ) {
+			return $fragments;
+		}
+		if ( preg_match_all( '/<(?:p|li)[^>]*>(.*?)<\/(?:p|li)>/is', $post->post_content, $m ) ) {
+			foreach ( $m[1] as $raw ) {
+				$t = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( $raw ) ) );
+				if ( strlen( $t ) < 26 ) {
+					continue;
+				}
+				if ( preg_match( '/\b(home|about|menu|reviews|contact|cart|login|register)\b/i', $t ) ) {
+					continue;
+				}
+				$fragments[] = $t;
+			}
+		}
+		if ( empty( $fragments ) ) {
+			$fallback = $this->gleo_plain_body_excerpt( $post );
+			if ( '' !== $fallback ) {
+				$fragments[] = $fallback;
+			}
+		}
+		return $fragments;
+	}
+
+	/**
+	 * Build 60–100 word "in brief" lead from post body text.
 	 *
 	 * @param WP_Post $post Post.
 	 * @param array|null $contextual_assets Scan contextual assets.
 	 * @return string Plain text (already safe for esc_html).
 	 */
 	private function gleo_opening_in_brief_text( WP_Post $post, $contextual_assets ) {
-		$candidate = '';
-		if ( is_array( $contextual_assets ) && ! empty( $contextual_assets['depth_html'] ) ) {
-			$candidate = wp_strip_all_tags( $contextual_assets['depth_html'] );
-		}
-		if ( $candidate === '' ) {
-			$candidate = $this->gleo_plain_body_excerpt( $post );
-		}
+		$parts = $this->gleo_content_fragments( $post );
+		$candidate = implode( ' ', array_slice( $parts, 0, 2 ) );
 		$words = preg_split( '/\s+/u', trim( $candidate ), -1, PREG_SPLIT_NO_EMPTY );
 		if ( empty( $words ) ) {
 			return sprintf( 'This article explains %s in practical terms you can use right away.', wp_strip_all_tags( $post->post_title ) );
@@ -1197,42 +1554,7 @@ main h2.wp-block-heading.gleo-section-heading,
 	}
 
 	/**
-	 * Key takeaway bullets (no external labels like "TL;DR").
-	 *
-	 * @param WP_Post    $post Post.
-	 * @param array|null $contextual_assets Assets.
-	 * @return string[] Plain sentences.
-	 */
-	private function gleo_key_takeaway_strings( WP_Post $post, $contextual_assets ) {
-		$base = $this->gleo_plain_body_excerpt( $post );
-		if ( is_array( $contextual_assets ) && ! empty( $contextual_assets['authority_html'] ) ) {
-			$base .= ' ' . wp_strip_all_tags( $contextual_assets['authority_html'] );
-		}
-		$sentences = preg_split( '/(?<=[.!?])\s+/u', trim( $base ), -1, PREG_SPLIT_NO_EMPTY );
-		$out       = array();
-		foreach ( $sentences as $s ) {
-			$s = trim( $s );
-			if ( strlen( $s ) < 42 ) {
-				continue;
-			}
-			$out[] = $s;
-			if ( count( $out ) >= 4 ) {
-				break;
-			}
-		}
-		if ( count( $out ) < 3 ) {
-			$t = wp_strip_all_tags( $post->post_title );
-			$out = array(
-				sprintf( 'Clarifies who %s is for and what problem it solves.', $t ),
-				sprintf( 'Outlines practical considerations before you choose %s.', $t ),
-				sprintf( 'Points to the sections below for specifics and next steps.', $t ),
-			);
-		}
-		return $out;
-	}
-
-	/**
-	 * Full HTML block: inverted-pyramid lead + key takeaways.
+	 * Full HTML block: inverted-pyramid lead only (top-of-article context).
 	 *
 	 * @param WP_Post    $post Post.
 	 * @param array|null $contextual_assets Assets.
@@ -1240,14 +1562,8 @@ main h2.wp-block-heading.gleo-section-heading,
 	 */
 	private function gleo_build_opening_summary_block( WP_Post $post, $contextual_assets ) {
 		$brief_raw = $this->gleo_opening_in_brief_text( $post, $contextual_assets );
-		$bullets   = $this->gleo_key_takeaway_strings( $post, $contextual_assets );
-		$lis       = '';
-		foreach ( $bullets as $b ) {
-			$lis .= '<li>' . esc_html( $b ) . '</li>';
-		}
 		$inner  = '<div class="gleo-opening-summary-wrap">';
 		$inner .= '<div class="gleo-direct-answer"><p><span class="gleo-lead-label">' . esc_html__( 'In brief', 'gleo' ) . '</span> ' . esc_html( $brief_raw ) . '</p></div>';
-		$inner .= '<div class="gleo-key-takeaways"><h3 class="gleo-key-takeaways-title">' . esc_html__( 'Key takeaways', 'gleo' ) . '</h3><ul class="gleo-key-takeaways-list">' . $lis . '</ul></div>';
 		$inner .= '</div><!-- gleo:opening-summary:end -->';
 		return "<!-- wp:html -->\n" . $inner . "\n<!-- /wp:html -->";
 	}
@@ -1417,6 +1733,8 @@ main h2.wp-block-heading.gleo-section-heading,
 
 		$content = $post->post_content;
 		$modified = false;
+		$authority_has_numeric_stat = false;
+		$faq_pairs_for_schema = array();
 
 		switch ( $type ) {
 
@@ -1434,9 +1752,13 @@ main h2.wp-block-heading.gleo-section-heading,
 				break;
 
 			case 'opening_summary':
+				$content  = $this->gleo_strip_key_takeaways_block( $content );
 				$content  = $this->gleo_strip_opening_summary_block( $content );
 				$opening   = $this->gleo_build_opening_summary_block( $post, $contextual_assets );
-				$content   = $opening . "\n\n" . $content;
+				// Place summary deeper to avoid overlapping theme hero/header text regions.
+				$p_total = (int) preg_match_all( '/<\/p>/i', $content );
+				$target  = $p_total >= 6 ? 3 : 2;
+				$content = $this->inject_after_paragraph( $content, $opening, $target );
 				$modified  = true;
 				break;
 
@@ -1457,15 +1779,15 @@ main h2.wp-block-heading.gleo-section-heading,
 				if ( is_array( $contextual_assets ) && ! empty( $contextual_assets['authority_html'] ) ) {
 					$quote = wp_strip_all_tags( $contextual_assets['authority_html'] );
 				}
+				if ( $this->gleo_text_looks_like_stat_placeholder_instruction( $quote ) ) {
+					$quote = '';
+				}
 				if ( $quote === '' ) {
 					$quote = sprintf(
 						/* translators: %s: article topic */
 						__( 'For important decisions about %s, cross-check details with primary sources and your own requirements.', 'gleo' ),
 						wp_strip_all_tags( $post->post_title )
 					);
-				}
-				if ( strlen( $quote ) > 360 ) {
-					$quote = substr( $quote, 0, 357 ) . '…';
 				}
 				$fig  = '<figure class="gleo-expert-quote"><blockquote class="gleo-expert-quote__text"><p>' . esc_html( $quote ) . '</p></blockquote>';
 				$fig .= '<figcaption class="gleo-expert-quote__cite">' . esc_html__( 'Expert perspective', 'gleo' ) . '</figcaption></figure>';
@@ -1504,8 +1826,10 @@ main h2.wp-block-heading.gleo-section-heading,
 			$heading_labels = $this->gleo_section_heading_labels_for_post( $post, $max_headings );
 			$avoid_near     = array( 'testimonial', 'review', ' said ', 'recommend', 'loved', 'quote', 'rating', 'stars', '★', '5 star', 'cookie', 'subscribe', 'newsletter' );
 			$insert_every   = (int) max( 4, ceil( $p_total / max( 1, $max_headings + 1 ) ) );
-			$paragraphs     = preg_split( '/(<\/p>\s*)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
-			$new_content    = '';
+			// Never insert section H2s in the last ~22% of paragraphs (avoids orphan headings at the very end).
+			$last_ok_para   = (int) max( 1, (int) floor( $p_total * 0.78 ) );
+			$paragraphs     = preg_split( '/(<\/p\s*>)/i', $content, -1, PREG_SPLIT_DELIM_CAPTURE );
+			$to_insert      = array();
 			$p_count        = 0;
 			$heading_num    = 0;
 			$buffer         = '';
@@ -1518,11 +1842,10 @@ main h2.wp-block-heading.gleo-section-heading,
 					$p_count++;
 					$para_plain = trim( wp_strip_all_tags( $chunk_for_scan ) );
 				} else {
-					$buffer    .= $part;
+					$buffer         .= $part;
 					$chunk_for_scan = '';
 					$para_plain     = '';
 				}
-				$new_content .= $part;
 				if ( ! $closed_para ) {
 					continue;
 				}
@@ -1546,16 +1869,29 @@ main h2.wp-block-heading.gleo-section-heading,
 					$at_interval &&
 					$p_count > 0 &&
 					$p_count < $p_total &&
+					$p_count <= $last_ok_para &&
 					$heading_num < $max_headings &&
 					! preg_match( '/<h[2-6]/i', $chunk_for_scan ) &&
 					! $skip
 				) {
 					$section_label = esc_html( $heading_labels[ $heading_num ] );
-					$new_content  .= "\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading gleo-section-heading\">{$section_label}</h2>\n<!-- /wp:heading -->\n";
+					$html          = "\n<!-- wp:heading -->\n<h2 class=\"wp-block-heading gleo-section-heading\">{$section_label}</h2>\n<!-- /wp:heading -->\n";
+					$to_insert[]   = array(
+						'after' => $p_count,
+						'html'  => $html,
+					);
 					$heading_num++;
 				}
 			}
-			$content  = $new_content;
+			usort(
+				$to_insert,
+				static function ( $a, $b ) {
+					return ( (int) $b['after'] ) <=> ( (int) $a['after'] );
+				}
+			);
+			foreach ( $to_insert as $row ) {
+				$content = $this->inject_after_paragraph( $content, $row['html'], (int) $row['after'] );
+			}
 			$modified = true;
 			break;
 
@@ -1632,16 +1968,9 @@ main h2.wp-block-heading.gleo-section-heading,
 					}
 				}
 
-				// Fallback generic questions
+				// Do not fabricate FAQ entries; require generated FAQ/Q&A content.
 				if ( empty( $pairs ) ) {
-					$questions = is_array( $user_input ) && ! empty( $user_input ) ? $user_input : array(
-						'What are the core benefits covered in this article?',
-						'Are there any key challenges to keep in mind?',
-						'How can these practices be implemented efficiently?'
-					);
-					foreach ( $questions as $q ) {
-						$pairs[] = array( 'q' => sanitize_text_field( $q ), 'a' => 'Refer to the main sections of the article above for comprehensive answers and insights.' );
-					}
+					return new WP_Error( 'missing_input', 'FAQ content is not available yet. Run optimization first so FAQ entries are generated.', array( 'status' => 400 ) );
 				}
 
 				// Build accordion HTML
@@ -1654,6 +1983,7 @@ main h2.wp-block-heading.gleo-section-heading,
 						. '<div class="gleo-faq-a"><p>' . $a . '</p></div>'
 						. '</div>';
 				}
+				$faq_pairs_for_schema = array_slice( $pairs, 0, 5 );
 				$faq_inner = '<div class="gleo-faq-wrap"><h2>Frequently Asked Questions</h2>'
 					. '<div class="gleo-faq-accordion">' . $items_html . '</div></div>';
 				// Wrap as a proper Gutenberg HTML block so the block editor preserves it intact.
@@ -1697,11 +2027,12 @@ main h2.wp-block-heading.gleo-section-heading,
 				break;
 
 			case 'authority':
-				if ( ! empty( $contextual_assets['authority_html'] ) ) {
-					$stats_text = wp_strip_all_tags( $contextual_assets['authority_html'] );
-				} else {
-					$stats_text = is_string( $user_input ) && !empty( $user_input ) ? sanitize_textarea_field( $user_input ) : 'Include one or two sourced figures that are directly relevant to this post topic.';
+				$content = $this->gleo_strip_stats_callout_blocks( $content );
+				$stats_text = is_string( $user_input ) && ! empty( $user_input ) ? sanitize_textarea_field( $user_input ) : '';
+				if ( '' === $stats_text ) {
+					return new WP_Error( 'missing_input', __( 'Statistics text is required.', 'gleo' ), array( 'status' => 400 ) );
 				}
+				$authority_has_numeric_stat = (bool) preg_match( '/\d/', $stats_text );
 				$callout_inner = '<aside class="gleo-stats-callout" role="note">'
 					. '<div class="gleo-stats-inner">'
 					. '<p class="gleo-stats-text">' . esc_html( $stats_text ) . '</p>'
@@ -1754,6 +2085,7 @@ main h2.wp-block-heading.gleo-section-heading,
 
 		// If content was modified, update the post
 		if ( $modified ) {
+			$content = $this->gleo_strip_instructional_stat_snippets( $content );
 			wp_update_post( array(
 				'ID'           => $post_id,
 				'post_content' => $content,
@@ -1765,6 +2097,57 @@ main h2.wp-block-heading.gleo-section-heading,
 			$result_data = json_decode( $scan->scan_result, true );
 			if ( ! isset( $result_data['content_signals'] ) ) {
 				$result_data['content_signals'] = array();
+			}
+			if ( ! empty( $faq_pairs_for_schema ) ) {
+				$faq_entities = array();
+				foreach ( $faq_pairs_for_schema as $pair ) {
+					$q = isset( $pair['q'] ) ? trim( (string) $pair['q'] ) : '';
+					$a = isset( $pair['a'] ) ? trim( (string) $pair['a'] ) : '';
+					if ( '' === $q || '' === $a ) {
+						continue;
+					}
+					$faq_entities[] = array(
+						'@type' => 'Question',
+						'name'  => $q,
+						'acceptedAnswer' => array(
+							'@type' => 'Answer',
+							'text'  => $a,
+						),
+					);
+				}
+				if ( count( $faq_entities ) >= 2 ) {
+					$existing_schema = isset( $result_data['json_ld_schema'] ) && is_array( $result_data['json_ld_schema'] )
+						? $result_data['json_ld_schema']
+						: array(
+							'@context' => 'https://schema.org',
+							'@type'    => 'Article',
+							'headline' => wp_strip_all_tags( $post->post_title ),
+						);
+					if ( isset( $existing_schema['@graph'] ) && is_array( $existing_schema['@graph'] ) ) {
+						$graph = array();
+						foreach ( $existing_schema['@graph'] as $node ) {
+							$types = isset( $node['@type'] ) ? (array) $node['@type'] : array();
+							if ( in_array( 'FAQPage', $types, true ) ) {
+								continue;
+							}
+							$graph[] = $node;
+						}
+						$graph[] = array(
+							'@type'      => 'FAQPage',
+							'mainEntity' => $faq_entities,
+						);
+						$result_data['json_ld_schema'] = array(
+							'@context' => 'https://schema.org',
+							'@graph'   => $graph,
+						);
+					} else {
+						$types = isset( $existing_schema['@type'] ) ? (array) $existing_schema['@type'] : array( 'Article' );
+						$types = array_values( array_unique( array_merge( $types, array( 'FAQPage' ) ) ) );
+						$existing_schema['@type'] = $types;
+						$existing_schema['mainEntity'] = $faq_entities;
+						$result_data['json_ld_schema'] = $existing_schema;
+					}
+				}
 			}
 			$cs = &$result_data['content_signals'];
 			switch ( $type ) {
@@ -1779,7 +2162,12 @@ main h2.wp-block-heading.gleo-section-heading,
 				case 'formatting': $cs['has_lists'] = true; $cs['list_item_count'] = max($cs['list_item_count'] ?? 0, 12); break;
 				case 'faq': $cs['has_faq'] = true; break;
 				case 'credibility': $cs['has_citations'] = true; $cs['citation_count'] = max($cs['citation_count'] ?? 0, 5); break;
-				case 'authority': $cs['stat_count'] = max($cs['stat_count'] ?? 0, 3); break;
+				case 'authority':
+					if ( $authority_has_numeric_stat ) {
+						$cs['stat_count'] = max( (int) ( $cs['stat_count'] ?? 0 ), 1 );
+						$cs['has_statistics'] = true;
+					}
+					break;
 				case 'answer_readiness': $cs['has_direct_answers'] = true; break;
 				case 'opening_summary':
 					$cs['has_direct_answer'] = true;

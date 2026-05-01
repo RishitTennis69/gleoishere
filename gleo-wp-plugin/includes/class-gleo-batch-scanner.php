@@ -5,6 +5,68 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Gleo_Batch_Scanner {
 
+	/**
+	 * Extract article-focused HTML from rendered page so analysis avoids nav/footer/theme chrome.
+	 *
+	 * @param string $full_html Full rendered page HTML.
+	 * @return string
+	 */
+	private function extract_focus_html_from_rendered_page( $full_html ) {
+		if ( ! is_string( $full_html ) || '' === trim( $full_html ) ) {
+			return '';
+		}
+		if ( ! class_exists( 'DOMDocument' ) ) {
+			return '';
+		}
+		$dom = new DOMDocument();
+		libxml_use_internal_errors( true );
+		$ok = $dom->loadHTML( '<?xml encoding="utf-8" ?>' . $full_html, LIBXML_NOWARNING | LIBXML_NOERROR );
+		libxml_clear_errors();
+		libxml_use_internal_errors( false );
+		if ( ! $ok ) {
+			return '';
+		}
+		$xpath = new DOMXPath( $dom );
+		$content_node = null;
+		foreach ( array(
+			"//*[contains(concat(' ', normalize-space(@class), ' '), ' entry-content ')]",
+			"//*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-post-content ')]",
+			'//article',
+			'//main',
+			'//body',
+		) as $query ) {
+			$nodes = $xpath->query( $query );
+			if ( $nodes instanceof DOMNodeList && $nodes->length > 0 ) {
+				$content_node = $nodes->item( 0 );
+				break;
+			}
+		}
+		if ( ! $content_node ) {
+			return '';
+		}
+		$head_snippets = '';
+		foreach ( array(
+			'//head/meta[@name="robots"]',
+			'//head/script[@type="application/ld+json"]',
+			'//head/link[@rel="alternate" and contains(@href, "/llms.txt")]',
+		) as $query ) {
+			$nodes = $xpath->query( $query );
+			if ( $nodes instanceof DOMNodeList && $nodes->length > 0 ) {
+				foreach ( $nodes as $node ) {
+					$head_snippets .= $dom->saveHTML( $node );
+				}
+			}
+		}
+		$body_html = $dom->saveHTML( $content_node );
+		if ( ! is_string( $body_html ) || '' === trim( $body_html ) ) {
+			return '';
+		}
+		$body_html = preg_replace( '/<header[\s\S]*?<\/header>/i', '', $body_html );
+		$body_html = preg_replace( '/<nav[\s\S]*?<\/nav>/i', '', $body_html );
+		$body_html = preg_replace( '/<footer[\s\S]*?<\/footer>/i', '', $body_html );
+		return "<!doctype html><html><head>{$head_snippets}</head><body>{$body_html}</body></html>";
+	}
+
 	public function __construct() {
 		add_action( 'rest_api_init', array( $this, 'register_routes' ) );
 	}
@@ -80,7 +142,9 @@ class Gleo_Batch_Scanner {
 			
 			$html_content = '';
 			if ( $response && ! is_wp_error( $response ) && wp_remote_retrieve_response_code( $response ) === 200 ) {
-				$html_content = wp_remote_retrieve_body( $response );
+				$full_html = wp_remote_retrieve_body( $response );
+				$focused_html = $this->extract_focus_html_from_rendered_page( $full_html );
+				$html_content = '' !== $focused_html ? $focused_html : $full_html;
 			} else {
 				// Fallback to basic content if the live fetch fails for some reason
 				$html_content = $api_client->sanitize_content( $post->post_content );
